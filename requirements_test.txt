@@ -1,0 +1,4 @@
+pytest-homeassistant-custom-component==0.13.367
+asyncssh==2.24.1
+ruff==0.16.10
+home-assistant-frontend==20260826.7
