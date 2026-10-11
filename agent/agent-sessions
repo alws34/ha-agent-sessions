@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""Agent Sessions server agent.
+
+Home Assistant runs this over SSH as a forced command (see install.sh), so it is the only thing HA's key can do.
+Protocol: SSH_ORIGINAL_COMMAND is "<verb> [base64(json payload)]"; the reply is one JSON line on stdout.
+Verbs: info, list, new, resume, stop, trust. Sessions run in GNU screen; Claude Code and Codex CLI are supported.
+Standard library only, Python 3.9+.
+"""
+import base64, json, os, re, shlex, shutil, sqlite3, subprocess, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "1"
+HOME = Path.home()
+CACHE = HOME / ".cache" / "agent-sessions" / "titles.json"
+PREFIX = "agent-"  # screen names this agent creates
+TOOLS = ("claude", "codex")
+SESSION_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SCREEN_ID = re.compile(r"^\d+\.[\w.-]+$")
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
+
+
+class Fail(Exception):
+    pass
+
+
+def iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts else None
+
+
+# ---------- tools ----------
+
+def which(tool):
+    # A forced command gets a bare PATH; look where installers usually put these, then ask a login shell.
+    found = shutil.which(tool) or shutil.which(tool, path=f"{HOME}/.local/bin:{HOME}/bin:/usr/local/bin")
+    if found:
+        return found
+    try:
+        r = subprocess.run(["bash", "-lc", f"command -v {tool}"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = r.stdout.strip().splitlines()
+    return out[-1] if r.returncode == 0 and out and out[-1].startswith("/") else None
+
+
+def version(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return (r.stdout or r.stderr).strip().splitlines()[0][:80] if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        return None
+
+
+# ---------- processes and screens ----------
+
+def screens():
+    try:
+        out = subprocess.run(["screen", "-ls"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return re.findall(r"^\t(\d+)\.(\S+)\t", out, re.M)  # [(pid, name)]
+
+
+def children_map():
+    kids = {}
+    for p in os.listdir("/proc"):
+        if p.isdigit():
+            try:
+                with open(f"/proc/{p}/stat") as f:
+                    ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, IndexError, ValueError):
+                continue
+            kids.setdefault(ppid, []).append(int(p))
+    return kids
+
+
+def descendants(pid, kids):
+    out, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        out.append(p)
+        todo += kids.get(p, [])
+    return out
+
+
+def argv(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+    except OSError:
+        return []
+
+
+def proc_cwd(pid):
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return ""
+
+
+def proc_start(pid):
+    try:
+        return os.stat(f"/proc/{pid}").st_mtime
+    except OSError:
+        return None
+
+
+# ---------- Claude Code ----------
+
+def claude_live():
+    """pid -> session json for every running Claude Code process."""
+    out = {}
+    for f in (HOME / ".claude" / "sessions").glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+            os.kill(d["pid"], 0)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        out[d["pid"]] = d
+    return out
+
+
+def _read_ends(path, size):
+    with open(path, "rb") as f:
+        head = f.read(65536).decode(errors="replace")
+        if size <= 65536:
+            return head, head
+        f.seek(max(65536, size - 262144))
+        return head, f.read().decode(errors="replace")
+
+
+def claude_meta(path, cache):
+    """(title, cwd) of a Claude transcript, or (None, None) for an empty session. Cached by mtime and size."""
+    st = path.stat()
+    key, sig = str(path), [st.st_mtime, st.st_size]
+    if key in cache and cache[key][:2] == sig:
+        return cache[key][2], cache[key][3]
+    head, tail = _read_ends(path, st.st_size)
+    cwd = re.search(r'"cwd":"((?:[^"\\]|\\.)*)"', head)
+    titles = (re.findall(r'"customTitle":"((?:[^"\\]|\\.)*)"', tail)
+              or re.findall(r'"aiTitle":"((?:[^"\\]|\\.)*)"', tail)
+              or [t for t in re.findall(r'"role":"user","content":"((?:[^"\\]|\\.)*)"', head) if not t.startswith("<")])
+    title = cwd_s = None
+    if cwd and titles:  # no prompt and no title = hooks-only session, never used
+        title = json.loads(f'"{titles[-1]}"').replace("\n", " ")[:80]
+        cwd_s = json.loads(f'"{cwd.group(1)}"')
+    cache[key] = sig + [title, cwd_s]
+    return title, cwd_s
+
+
+def claude_recent(cache):
+    out = []
+    files = sorted((HOME / ".claude" / "projects").glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in files[:200]:
+        title, cwd = claude_meta(p, cache)
+        if title:
+            out.append({"tool": "claude", "session_id": p.stem, "title": title, "cwd": cwd,
+                        "updated": p.stat().st_mtime})
+    return out
+
+
+# ---------- Codex CLI ----------
+
+def codex_db():
+    dbs = sorted(CODEX_HOME.glob("state_*.sqlite"), key=lambda p: int(re.sub(r"\D", "", p.stem) or 0))
+    if not dbs:
+        return None
+    return sqlite3.connect(f"file:{dbs[-1]}?mode=ro", uri=True, timeout=5)
+
+
+def codex_rows(where="", params=()):
+    db = codex_db()
+    if not db:
+        return []
+    try:
+        db.row_factory = sqlite3.Row
+        return [dict(r) for r in db.execute(
+            "SELECT id, rollout_path, cwd, title, name, updated_at FROM threads WHERE archived = 0 " + where, params)]
+    except sqlite3.Error:
+        return []  # ponytail: schema is Codex-internal; if it changes, Codex sessions just stop being listed
+    finally:
+        db.close()
+
+
+def codex_busy(thread_id):
+    dbs = sorted(CODEX_HOME.glob("thread_history_*.sqlite"))
+    if not dbs:
+        return None
+    try:
+        db = sqlite3.connect(f"file:{dbs[-1]}?mode=ro", uri=True, timeout=5)
+        row = db.execute("SELECT status FROM thread_turns WHERE thread_id = ? ORDER BY rollout_ordinal DESC LIMIT 1",
+                         (thread_id,)).fetchone()
+        db.close()
+    except sqlite3.Error:
+        return None
+    return row and row[0] not in ("completed", "failed", "interrupted", "cancelled")
+
+
+def codex_title(r):
+    return (r.get("name") or r.get("title") or "Codex session").replace("\n", " ")[:80]
+
+
+def codex_recent():
+    return [{"tool": "codex", "session_id": r["id"], "title": codex_title(r), "cwd": r["cwd"],
+             "updated": r["updated_at"]}
+            for r in codex_rows("AND thread_source IS NOT 'subagent' ORDER BY updated_at DESC LIMIT 100")]
+
+
+def codex_thread_of(pids):
+    """The Codex thread a process tree is writing to, found through its open rollout file."""
+    for p in pids:
+        try:
+            fds = os.listdir(f"/proc/{p}/fd")
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"/proc/{p}/fd/{fd}")
+            except OSError:
+                continue
+            if target.endswith(".jsonl") and "rollout-" in target:
+                rows = codex_rows("AND rollout_path = ?", (target,))
+                if rows:
+                    return rows[0]
+    return None
+
+
+# ---------- verbs ----------
+
+def running(cache=None):
+    cache = cache if cache is not None else {}
+    kids, live = children_map(), claude_live()
+    titles = {}
+    out = []
+    for spid, name in screens():
+        tree = descendants(int(spid), kids)
+        item = {"id": f"{spid}.{name}", "name": name, "tool": None, "title": "", "status": "starting",
+                "cwd": "", "started": iso(proc_start(int(spid))), "session_id": None}
+        claude = next((live[p] for p in tree if p in live), None)
+        codex = None if claude else next((p for p in tree if os.path.basename((argv(p) or [""])[0]) == "codex"), None)
+        if claude:
+            sid = claude.get("sessionId")
+            if not titles:
+                titles.update({s["session_id"]: s["title"] for s in claude_recent(cache)})
+            item.update(tool="claude", session_id=sid, cwd=claude.get("cwd", ""),
+                        title=titles.get(sid) or claude.get("name") or "New Claude session",
+                        status={"busy": "working", "idle": "idle"}.get(claude.get("status"), "idle"))
+            if claude.get("startedAt"):
+                item["started"] = iso(claude["startedAt"] / 1000)
+        elif codex:
+            row = codex_thread_of(descendants(codex, kids))
+            item.update(tool="codex", cwd=proc_cwd(codex), title="New Codex session", status="idle")
+            if row:
+                item.update(session_id=row["id"], title=codex_title(row), cwd=row["cwd"],
+                            status="working" if codex_busy(row["id"]) else "idle")
+        elif not name.startswith(PREFIX):
+            continue  # someone's unrelated screen
+        out.append(item)
+    return out
+
+
+def load_cache():
+    try:
+        return json.loads(CACHE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_cache(cache, before):
+    if cache != before:
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, CACHE)
+
+
+def live_ids(run):
+    """Session ids open anywhere: in our screens, or in a Claude started elsewhere (terminal, desktop app)."""
+    return {r["session_id"] for r in run if r["session_id"]} | {d.get("sessionId") for d in claude_live().values()}
+
+
+def do_list(p):
+    n = int(p.get("recent", 10))
+    cache = load_cache()
+    before = json.loads(json.dumps(cache))
+    run = running(cache)
+    busy = live_ids(run)
+    recent = sorted([s for s in claude_recent(cache) + codex_recent() if s["session_id"] not in busy],
+                    key=lambda s: s["updated"], reverse=True)[:max(0, min(n, 100))]
+    for s in recent:
+        s["updated"] = iso(s["updated"])
+    save_cache(cache, before)
+    return {"home": str(HOME), "running": run, "recent": recent}
+
+
+def do_info(_):
+    tools = {}
+    for t in TOOLS:
+        path = which(t)
+        tools[t] = {"path": path, "version": version([path, "--version"]) if path else None}
+    return {"agent": VERSION, "user": HOME.name, "home": str(HOME), "tools": tools,
+            "screen": version(["screen", "-v"])}
+
+
+def _atomic_write(path, text):
+    tmp = path.with_name(path.name + ".agent-sessions.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def trust_dir(tool, folder):
+    if tool == "claude":
+        p = HOME / ".claude.json"
+        d = json.loads(p.read_text()) if p.exists() else {}
+        proj = d.setdefault("projects", {}).setdefault(folder, {})
+        if not proj.get("hasTrustDialogAccepted"):  # only write when needed: running Claudes rewrite this file too
+            proj["hasTrustDialogAccepted"] = True
+            _atomic_write(p, json.dumps(d, indent=2))
+    else:
+        p = CODEX_HOME / "config.toml"
+        text = p.read_text() if p.exists() else ""
+        header = f"[projects.{json.dumps(folder)}]"
+        if header not in text:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(p, text.rstrip("\n") + ("\n\n" if text else "") + f'{header}\ntrust_level = "trusted"\n')
+
+
+def folder(path):
+    if not isinstance(path, str) or not path or "\0" in path or "\n" in path:
+        raise Fail("invalid folder")
+    full = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isdir(full):
+        raise Fail(f"folder not found: {path}")
+    return full
+
+
+def do_trust(p):
+    folders = p.get("folders")
+    if not isinstance(folders, list):
+        raise Fail("folders must be a list")
+    done = []
+    for f in folders:
+        full = folder(f)
+        for t in TOOLS:
+            if which(t):
+                trust_dir(t, full)
+        done.append(full)
+    return {"ok": True, "trusted": done}
+
+
+def clean_args(args):
+    if not isinstance(args, list) or len(args) > 40:
+        raise Fail("args must be a list")
+    out = []
+    for a in args:
+        if not isinstance(a, str) or len(a) > 500 or "\0" in a or "\n" in a:
+            raise Fail("invalid argument")
+        out.append(os.path.expanduser(a) if a.startswith("~/") else a)
+    return out
+
+
+def tool_of(p):
+    t = p.get("tool", "claude")
+    if t not in TOOLS:
+        raise Fail("unknown tool")
+    path = which(t)
+    if not path:
+        raise Fail(f"{t} is not installed on this server")
+    return t, path
+
+
+def launch(tool, path, cwd, args, label, trust):
+    if trust:
+        trust_dir(tool, cwd)
+    slug = re.sub(r"[^\w-]+", "-", label or datetime.now().strftime("%m%d-%H%M%S")).strip("-")[:40] or "session"
+    taken = {n for _, n in screens()}
+    name = f"{PREFIX}{tool}-{slug}"
+    i = 2
+    while name in taken:
+        name, i = f"{PREFIX}{tool}-{slug}-{i}", i + 1
+    # bash -li gives the session the user's normal environment (PATH, nvm, pyenv). The screen ends when the tool exits.
+    subprocess.run(["screen", "-dmS", name, "bash", "-lic", shlex.join([path, *args])], cwd=cwd, check=True,
+                   timeout=15)
+    for _ in range(20):
+        sid = next((f"{s}.{n}" for s, n in screens() if n == name), None)
+        if sid:
+            return {"ok": True, "id": sid}
+        time.sleep(0.1)
+    raise Fail("screen did not start")
+
+
+def do_new(p):
+    tool, path = tool_of(p)
+    cwd = folder(p.get("cwd") or "~")
+    args = clean_args(p.get("args", []))
+    name = p.get("name") or ""
+    if not isinstance(name, str) or len(name) > 80:
+        raise Fail("invalid name")
+    if name and tool == "claude" and "--name" not in args and "-n" not in args:
+        args += ["--name", name]
+    return launch(tool, path, cwd, args, name, bool(p.get("trust")))
+
+
+def do_resume(p):
+    tool, path = tool_of(p)
+    sid = p.get("session_id")
+    if not isinstance(sid, str) or not SESSION_ID.match(sid):
+        raise Fail("invalid session id")
+    if sid in live_ids(running()):
+        raise Fail("that session is already running")
+    args = clean_args(p.get("args", []))
+    if tool == "claude":
+        cwd = next((s["cwd"] for s in claude_recent(load_cache()) if s["session_id"] == sid), None)
+        argv_ = [*args, "--resume", sid]
+    else:
+        row = next(iter(codex_rows("AND id = ?", (sid,))), None)
+        cwd = row and row["cwd"]
+        argv_ = ["resume", *args, sid]
+    if cwd is None:
+        raise Fail("session not found")
+    cwd = cwd if os.path.isdir(cwd) else str(HOME)
+    return launch(tool, path, cwd, argv_, p.get("name") or "", bool(p.get("trust")))
+
+
+def do_stop(p):
+    sid = p.get("id")
+    if not isinstance(sid, str) or not SCREEN_ID.match(sid):
+        raise Fail("invalid session")
+    if sid not in {f"{s}.{n}" for s, n in screens()}:
+        raise Fail("no such session")
+    subprocess.run(["screen", "-S", sid, "-X", "quit"], timeout=10)
+    return {"ok": True}
+
+
+VERBS = {"info": do_info, "list": do_list, "new": do_new, "resume": do_resume, "stop": do_stop, "trust": do_trust}
+
+
+def main(command):
+    verb, _, raw = command.strip().partition(" ")
+    if verb not in VERBS:
+        return {"error": f"unknown command {verb!r}"}
+    try:
+        payload = json.loads(base64.b64decode(raw, validate=True)) if raw else {}
+        if not isinstance(payload, dict):
+            raise Fail("payload must be an object")
+        return VERBS[verb](payload)
+    except Fail as e:
+        return {"error": str(e)}
+    except (ValueError, TypeError) as e:
+        return {"error": f"bad request: {e}"}
+    except subprocess.SubprocessError as e:
+        return {"error": f"command failed: {e}"}
+
+
+if __name__ == "__main__":
+    print(json.dumps(main(os.environ.get("SSH_ORIGINAL_COMMAND") or " ".join(sys.argv[1:]))))

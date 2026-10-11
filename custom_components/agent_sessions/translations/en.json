@@ -1,0 +1,126 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a server",
+        "description": "Add one server (repeat for more). Sessions on it will run as the user you enter here.",
+        "data": {
+          "name": "Name",
+          "host": "Host",
+          "port": "SSH port",
+          "username": "User (sessions run as this user)",
+          "ha_address": "Home Assistant address as seen by the server"
+        },
+        "data_description": {
+          "ha_address": "The server only accepts Home Assistant's key from this address. Detected automatically; change it if Home Assistant reaches the server through another address."
+        }
+      },
+      "authorize": {
+        "title": "Authorize Home Assistant on {name}",
+        "description": "Home Assistant made its own SSH key for **{name}**. The key can **only** run the Agent Sessions agent: no shell, no port forwarding, and it only works from **{ha_address}**.\n\n1. Open a terminal on **{host}** as **{user}**.\n2. Paste this and press Enter:\n\n```\n{command}\n```\n\nIt installs the agent to `~/.local/bin/agent-sessions` and adds the key to `~/.ssh/authorized_keys`. Nothing else. [View the script]({script_url}) before running it.\n\n3. It needs `python3`, `screen`, and `claude` and/or `codex` on that server. The installer checks and tells you what is missing.\n4. Press **Submit**. Home Assistant connects and shows the server's fingerprint."
+      },
+      "confirm": {
+        "title": "Confirm server identity",
+        "description": "Connected. Found: **{tools}** ({screen}).\n\nHost key fingerprint:\n\n`{fingerprint}`\n\nThe installer printed this server's fingerprints at the end. You can also check it on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. Home Assistant will refuse to connect if it ever changes."
+      }
+    },
+    "error": {
+      "not_authorized": "The server refused Home Assistant's key. Run the command above on the server as that user, then press Submit again.",
+      "cannot_connect": "Could not connect to the server. Check the host and port.",
+      "no_tools": "Connected, but neither claude nor codex was found for that user. Install one and press Submit again."
+    },
+    "abort": {
+      "already_configured": "This server and user are already added."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Server options",
+        "data": {
+          "default_tool": "Default tool for new sessions",
+          "claude_flags": "Claude Code: flags ticked by default",
+          "claude_model": "Claude Code: default --model",
+          "claude_effort": "Claude Code: default --effort",
+          "claude_custom_flags": "Claude Code: custom flags",
+          "codex_flags": "Codex CLI: flags ticked by default",
+          "codex_model": "Codex CLI: default model (-m)",
+          "codex_effort": "Codex CLI: default reasoning effort",
+          "codex_custom_flags": "Codex CLI: custom flags",
+          "folders": "Favorite folders",
+          "trusted_folders": "Trusted folders",
+          "trust_any": "Also trust any other folder I start a session in",
+          "recent": "Recent sessions to show",
+          "scan_interval": "Check the server for changes every",
+          "confirm_stop": "Ask before stopping a session"
+        },
+        "data_description": {
+          "claude_custom_flags": "One per line. Start a line with * to tick it by default.",
+          "codex_custom_flags": "One per line. Start a line with * to tick it by default.",
+          "folders": "One per line. Offered when you start a new session.",
+          "trusted_folders": "One per line, subfolders included. The tools won't ask whether you trust these folders. Applied on the server when you save.",
+          "scan_interval": "Runs a quick check over SSH on the server. It does not contact Claude or OpenAI."
+        }
+      }
+    }
+  },
+  "selector": {
+    "tool": { "options": { "claude": "Claude Code", "codex": "Codex CLI" } },
+    "claude_flags": {
+      "options": {
+        "skip_permissions": "--dangerously-skip-permissions",
+        "remote_control": "--remote-control",
+        "continue": "--continue",
+        "model": "--model",
+        "effort": "--effort",
+        "verbose": "--verbose"
+      }
+    },
+    "codex_flags": {
+      "options": {
+        "bypass": "--dangerously-bypass-approvals-and-sandbox",
+        "search": "--search",
+        "model": "-m (model)",
+        "effort": "reasoning effort",
+        "no_alt_screen": "--no-alt-screen"
+      }
+    }
+  },
+  "entity": {
+    "sensor": { "sessions": { "name": "Sessions" } }
+  },
+  "exceptions": {
+    "no_server": { "message": "That server is not set up or is not loaded." }
+  },
+  "services": {
+    "new_session": {
+      "name": "New session",
+      "description": "Start a Claude Code or Codex CLI session in a screen on a server.",
+      "fields": {
+        "config_entry_id": { "name": "Server", "description": "The server to start it on." },
+        "tool": { "name": "Tool", "description": "claude or codex." },
+        "folder": { "name": "Folder", "description": "Working folder. Defaults to the home folder." },
+        "args": { "name": "Arguments", "description": "Command-line arguments, as a list." },
+        "name": { "name": "Name", "description": "Optional session name." }
+      }
+    },
+    "resume_session": {
+      "name": "Resume session",
+      "description": "Resume a past session in a new screen.",
+      "fields": {
+        "config_entry_id": { "name": "Server", "description": "The server it ran on." },
+        "tool": { "name": "Tool", "description": "claude or codex." },
+        "session_id": { "name": "Session ID", "description": "The session's ID." },
+        "args": { "name": "Arguments", "description": "Extra command-line arguments, as a list." }
+      }
+    },
+    "stop_session": {
+      "name": "Stop session",
+      "description": "Stop a running session and close its screen.",
+      "fields": {
+        "config_entry_id": { "name": "Server", "description": "The server it runs on." },
+        "session": { "name": "Session", "description": "The session's screen ID (pid.name)." }
+      }
+    }
+  }
+}

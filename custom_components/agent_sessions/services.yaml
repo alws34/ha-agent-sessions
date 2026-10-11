@@ -1,0 +1,38 @@
+new_session:
+  fields:
+    config_entry_id:
+      required: true
+      selector: { config_entry: { integration: agent_sessions } }
+    tool:
+      required: true
+      selector: { select: { options: [claude, codex] } }
+    folder:
+      example: "~/code/webapp"
+      selector: { text: }
+    args:
+      example: '["--dangerously-skip-permissions", "--remote-control"]'
+      selector: { object: }
+    name:
+      selector: { text: }
+resume_session:
+  fields:
+    config_entry_id:
+      required: true
+      selector: { config_entry: { integration: agent_sessions } }
+    tool:
+      required: true
+      selector: { select: { options: [claude, codex] } }
+    session_id:
+      required: true
+      selector: { text: }
+    args:
+      selector: { object: }
+stop_session:
+  fields:
+    config_entry_id:
+      required: true
+      selector: { config_entry: { integration: agent_sessions } }
+    session:
+      required: true
+      example: "12345.agent-claude-bugfix"
+      selector: { text: }
