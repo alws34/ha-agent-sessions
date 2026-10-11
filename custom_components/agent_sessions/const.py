@@ -1,6 +1,6 @@
 """Constants and the built-in flag catalog."""
 DOMAIN = "agent_sessions"
-VERSION = "0.1.1"  # must match manifest.json (tests check); also the git tag the installer is fetched from
+VERSION = "0.1.2"  # must match manifest.json (tests check); also the git tag the installer is fetched from
 REPO = "alws34/ha-agent-sessions"
 TOOLS = ("claude", "codex")
 TOOL_NAMES = {"claude": "Claude Code", "codex": "Codex CLI"}
