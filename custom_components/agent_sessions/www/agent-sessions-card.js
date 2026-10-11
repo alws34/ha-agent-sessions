@@ -20,27 +20,37 @@ const STYLE = `
   ha-card { padding: 14px; }
   .head { display: flex; align-items: center; gap: 10px; }
   .logo { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(127,127,127,.15); color: #d97757; font-size: 20px; flex: none; }
+    background: var(--soft-surface, rgba(127,127,127,.15)); box-shadow: var(--soft-shadow-inset, none); color: #d97757;
+    font-size: 20px; flex: none; }
+  /* Neumorphic themes (--soft-shadow-*): controls are raised, pressed/selected ones recessed. Others stay flat. */
+  button { transition: box-shadow .15s ease, transform .1s ease; }
+  button:active { box-shadow: var(--soft-shadow-inset, none) !important; transform: scale(.98); }
   .t { font-weight: 600; font-size: 15px; } .s { font-size: 12px; color: var(--secondary-text-color); }
   .min { min-width: 0; flex: 1; } .min > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nav { display: flex; gap: 6px; } .nb { width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
-    background: rgba(127,127,127,.14); color: var(--primary-text-color); font-size: 16px; }
-  .chips { display: flex; gap: 6px; margin-top: 12px; overflow-x: auto; scrollbar-width: none; }
-  .chip { padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; border: none;
-    background: rgba(127,127,127,.14); color: var(--secondary-text-color); cursor: pointer; }
-  .chip.on { background: #d9775726; color: #d97757; }
-  .btn { display: block; width: 100%; margin-top: 12px; padding: 9px 0; border: none; border-radius: 999px; cursor: pointer;
-    font: 600 13px var(--paper-font-body1_-_font-family, inherit); background: #5b7cfa22; color: #5b7cfa; }
-  .row { display: flex; align-items: center; gap: 10px; height: 58px; padding: 0 12px; margin-top: 10px; border-radius: 16px;
-    background: var(--secondary-background-color, rgba(127,127,127,.08)); min-width: 0; box-sizing: border-box; }
+  .nav { display: flex; gap: 8px; } .nb { width: 32px; height: 32px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--soft-surface, rgba(127,127,127,.14)); box-shadow: var(--soft-shadow-small, none);
+    color: var(--primary-text-color); font-size: 16px; }
+  /* padding so the scroll box doesn't clip the chips' shadows */
+  .chips { display: flex; gap: 8px; margin: 6px -8px 0; padding: 6px 8px 8px; overflow-x: auto; scrollbar-width: none; }
+  .chip { padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; border: none;
+    background: var(--soft-surface, rgba(127,127,127,.14)); box-shadow: var(--soft-shadow-small, none);
+    color: var(--secondary-text-color); cursor: pointer; }
+  .chip.on { background: var(--soft-surface, #d9775726); box-shadow: var(--soft-shadow-inset, none); color: #d97757; }
+  .btn { display: block; width: 100%; margin-top: 12px; padding: 10px 0; border: none; border-radius: 999px; cursor: pointer;
+    font: 600 13px var(--paper-font-body1_-_font-family, inherit); background: #5b7cfa22; color: #5b7cfa;
+    box-shadow: var(--soft-shadow-small, none); }
+  .row { display: flex; align-items: center; gap: 10px; height: 58px; padding: 0 12px; margin-top: 12px; border-radius: 16px;
+    background: var(--soft-surface, var(--secondary-background-color, rgba(127,127,127,.08)));
+    box-shadow: var(--soft-shadow-small, none); min-width: 0; box-sizing: border-box; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .a { font-size: 13px; font-weight: 600; } .b { font-size: 11px; color: var(--secondary-text-color); }
-  .pill { flex: none; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: none; cursor: pointer; }
-  .st { flex: none; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .pill { flex: none; padding: 6px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; border: none; cursor: pointer;
+    box-shadow: var(--soft-shadow-small, none); }
+  .st { flex: none; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; box-shadow: var(--soft-shadow-inset, none); }
   .tool { flex: none; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: rgba(127,127,127,.15);
     color: var(--secondary-text-color); margin-left: 6px; vertical-align: 1px; }
   .stop { background: #ef444422; color: #ef4444; } .resume { background: #22c55e22; color: #22c55e; }
-  .ghost { background: rgba(127,127,127,.14); color: var(--primary-text-color); }
+  .ghost { background: var(--soft-surface, rgba(127,127,127,.14)); color: var(--primary-text-color); }
   .sub { font-size: 12px; font-weight: 700; color: var(--secondary-text-color); margin: 16px 2px 0; text-transform: uppercase;
     letter-spacing: .06em; }
   .more { text-align: center; font-size: 12px; color: var(--secondary-text-color); margin-top: 10px; cursor: pointer; }
@@ -183,26 +193,40 @@ class AgentSessionsCard extends HTMLElement {
 const DSTYLE = `
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 9999; display: flex; align-items: center;
     justify-content: center; padding: 14px; box-sizing: border-box; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
-  .dlg { background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color);
+  .dlg { background: var(--soft-surface, var(--ha-card-background, var(--card-background-color, #fff))); color: var(--primary-text-color);
     border-radius: 22px; padding: 18px; width: 100%; max-width: 420px; max-height: 100%; overflow-y: auto; box-sizing: border-box;
     box-shadow: 0 20px 50px rgba(0,0,0,.3); }
   h3 { margin: 0 0 2px; font-size: 17px; } .s { font-size: 12px; color: var(--secondary-text-color); }
   label.l { display: block; font-size: 12px; font-weight: 600; color: var(--secondary-text-color); margin-top: 14px; }
   input[type=text], select { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 10px 12px; border-radius: 12px;
-    border: 1px solid var(--divider-color, rgba(127,127,127,.3)); background: transparent; color: inherit; font-size: 13px; }
+    border: none; box-shadow: var(--soft-shadow-inset, inset 0 0 0 1px var(--divider-color, rgba(127,127,127,.3)));
+    background: transparent; color: inherit; font-size: 13px; outline: none; }
+  input[type=text]:focus, select:focus { box-shadow: var(--soft-shadow-inset, inset 0 0 0 1px #d97757), inset 0 0 0 1px #d9775799; }
+  button { transition: box-shadow .15s ease, transform .1s ease; }
+  button:active { box-shadow: var(--soft-shadow-inset, none) !important; transform: scale(.98); }
   .tools { display: flex; gap: 6px; margin-top: 6px; }
   .tools button { flex: 1; padding: 8px; border-radius: 999px; border: none; cursor: pointer; font-weight: 600;
-    background: rgba(127,127,127,.14); color: var(--secondary-text-color); }
-  .tools button.on { background: #d9775726; color: #d97757; }
+    background: var(--soft-surface, rgba(127,127,127,.14)); box-shadow: var(--soft-shadow-small, none);
+    color: var(--secondary-text-color); }
+  .tools button.on { background: var(--soft-surface, #d9775726); box-shadow: var(--soft-shadow-inset, none); color: #d97757; }
   .chk { display: flex; align-items: center; gap: 10px; padding: 7px 2px; font: 12.5px ui-monospace, Menlo, monospace; }
-  .chk input[type=checkbox] { width: 18px; height: 18px; accent-color: #d97757; flex: none; margin: 0; }
-  .chk .v { margin-left: auto; width: 120px; margin-top: 0; padding: 4px 8px; font-family: inherit; }
+  .chk input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; flex: none; margin: 0;
+    border-radius: 6px; cursor: pointer; display: grid; place-content: center;
+    box-shadow: var(--soft-shadow-inset, inset 0 0 0 1.5px var(--secondary-text-color)); }
+  .chk input[type=checkbox]:checked { background: #d97757; box-shadow: var(--soft-shadow-small, none); }
+  .chk input[type=checkbox]:checked::after { content: ""; width: 5px; height: 10px; margin-top: -2px;
+    border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+  .chk input[type=checkbox]:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; }
+  .chk .v { margin-left: auto; width: 120px; margin-top: 0; padding: 5px 9px; font-family: inherit; }
   .chk .c { margin-left: auto; font: 11px sans-serif; color: var(--secondary-text-color); }
-  .prev { margin-top: 12px; padding: 10px; border-radius: 12px; background: rgba(127,127,127,.12); font: 11px ui-monospace, monospace;
+  .prev { margin-top: 12px; padding: 10px; border-radius: 12px; background: var(--soft-surface, rgba(127,127,127,.12));
+    box-shadow: var(--soft-shadow-inset, none); font: 11px ui-monospace, monospace;
     color: var(--secondary-text-color); word-break: break-all; }
   .btns { display: flex; gap: 10px; margin-top: 16px; }
-  .btns button { flex: 1; padding: 10px; border-radius: 999px; border: none; cursor: pointer; font-weight: 600; font-size: 13px; }
-  .cancel { background: rgba(127,127,127,.14); color: var(--primary-text-color); } .start { background: #5b7cfa22; color: #5b7cfa; }
+  .btns button { flex: 1; padding: 10px; border-radius: 999px; border: none; cursor: pointer; font-weight: 600; font-size: 13px;
+    box-shadow: var(--soft-shadow-small, none); }
+  .cancel { background: var(--soft-surface, rgba(127,127,127,.14)); color: var(--primary-text-color); }
+  .start { background: #5b7cfa22; color: #5b7cfa; }
 `;
 
 function openDialog(card, a) {
