@@ -21,7 +21,7 @@
       },
       "confirm": {
         "title": "Confirm server identity",
-        "description": "Connected. Found: **{tools}** ({screen}).\n\nHost key fingerprint:\n\n`{fingerprint}`\n\nThe installer printed this server's fingerprints at the end. You can also check it on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. Home Assistant will refuse to connect if it ever changes."
+        "description": "Connected. Found: **{tools}** ({screen}).\n\nHost key fingerprint:\n\n`{fingerprint}`\n\nIt should match the ED25519 line the installer printed at the end. You can also check it on the server with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. Home Assistant will refuse to connect if it ever changes."
       }
     },
     "error": {

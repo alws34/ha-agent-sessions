@@ -265,8 +265,20 @@ function openDialog(card, a) {
   root.querySelector("#folder").focus();
 }
 
-customElements.define("agent-sessions-card", AgentSessionsCard);
-customElements.define("agent-sessions-dialog", class extends HTMLElement {});
+// HA swaps window.customElements for a new registry ~70 ms into page load (2026.9+); this extra module can run before
+// that and define into the old one, so define again until the current registry has it. A subclass, because the new
+// registry may forward to the old one, where the class is already taken. (Same fix as ha-homehub-media.)
+const define = () => {
+  for (const [tag, cls] of [["agent-sessions-card", AgentSessionsCard], ["agent-sessions-dialog", AgentSessionsDialog]]) {
+    if (customElements.get(tag)) continue;
+    try { customElements.define(tag, cls); } catch { customElements.define(tag, class extends cls {}); }
+  }
+};
+class AgentSessionsDialog extends HTMLElement {}
+define();
+for (const ms of [100, 500, 2000, 5000]) setTimeout(define, ms);
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "agent-sessions-card", name: "Agent Sessions",
-  description: "Start, stop and resume Claude Code / Codex sessions on your servers." });
+if (!window.customCards.some((c) => c.type === "agent-sessions-card")) {
+  window.customCards.push({ type: "agent-sessions-card", name: "Agent Sessions",
+    description: "Start, stop and resume Claude Code / Codex sessions on your servers." });
+}

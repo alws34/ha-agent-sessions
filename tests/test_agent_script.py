@@ -79,3 +79,14 @@ def test_clean_args(agent):
     for bad in (["a\nb"], [1], "--x", ["x"] * 41):
         with pytest.raises(agent.Fail):
             agent.clean_args(bad)
+
+
+def test_resume_refused_while_previous_resume_is_starting(agent, monkeypatch):
+    sid = "b63eba06-b9de-4360-b686-8744a2707765"
+    procs = {"10": ["SCREEN", "-dmS", "agent-claude-x", "bash", "-lic", f"/bin/claude --resume {sid}"],
+             "11": ["vim", f"notes-{sid}.md"]}  # mentions the id but is not a resume
+    monkeypatch.setattr(agent.os, "listdir", lambda path: list(procs) if path == "/proc" else [])
+    monkeypatch.setattr(agent, "argv", lambda pid: procs.get(str(pid), []))
+    assert agent.resuming(sid)
+    procs.pop("10")
+    assert not agent.resuming(sid)

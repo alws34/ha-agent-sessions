@@ -401,25 +401,37 @@ def do_new(p):
     return launch(tool, path, cwd, args, name, bool(p.get("trust")))
 
 
+def resuming(sid):
+    """A resume of sid that is still starting: screen/bash/tool processes with it on their command line.
+    Needed because a just-resumed Claude has not written its session file yet."""
+    for q in os.listdir("/proc"):
+        if q.isdigit() and int(q) != os.getpid():
+            a = argv(int(q))
+            if a and os.path.basename(a[0]) in ("screen", "SCREEN", "bash", "claude", "codex", "node"):
+                line = " ".join(a)
+                if sid in line and "resume" in line:
+                    return True
+    return False
+
+
 def do_resume(p):
     tool, path = tool_of(p)
     sid = p.get("session_id")
     if not isinstance(sid, str) or not SESSION_ID.match(sid):
         raise Fail("invalid session id")
-    if sid in live_ids(running()):
+    if sid in live_ids(running()) or resuming(sid):
         raise Fail("that session is already running")
     args = clean_args(p.get("args", []))
     if tool == "claude":
-        cwd = next((s["cwd"] for s in claude_recent(load_cache()) if s["session_id"] == sid), None)
+        found = next((s for s in claude_recent(load_cache()) if s["session_id"] == sid), None)
         argv_ = [*args, "--resume", sid]
     else:
-        row = next(iter(codex_rows("AND id = ?", (sid,))), None)
-        cwd = row and row["cwd"]
+        found = next(({"cwd": r["cwd"], "title": codex_title(r)} for r in codex_rows("AND id = ?", (sid,))), None)
         argv_ = ["resume", *args, sid]
-    if cwd is None:
+    if found is None:
         raise Fail("session not found")
-    cwd = cwd if os.path.isdir(cwd) else str(HOME)
-    return launch(tool, path, cwd, argv_, p.get("name") or "", bool(p.get("trust")))
+    cwd = found["cwd"] if os.path.isdir(found["cwd"] or "") else str(HOME)
+    return launch(tool, path, cwd, argv_, p.get("name") or found["title"], bool(p.get("trust")))
 
 
 def do_stop(p):

@@ -23,7 +23,8 @@ done
 AGENT="$HOME/.local/bin/agent-sessions"
 mkdir -p "$HOME/.local/bin"
 tmp=$(mktemp)
-curl -fsSL "https://raw.githubusercontent.com/alws34/ha-agent-sessions/$REF/agent/agent-sessions" -o "$tmp"
+# AGENT_SESSIONS_URL: install from somewhere else (a fork, or a local file:// copy when testing)
+curl -fsSL "${AGENT_SESSIONS_URL:-https://raw.githubusercontent.com/alws34/ha-agent-sessions/$REF/agent/agent-sessions}" -o "$tmp"
 head -1 "$tmp" | grep -q python3 || { echo "download failed" >&2; rm -f "$tmp"; exit 1; }
 install -m 755 "$tmp" "$AGENT"; rm -f "$tmp"
 
