@@ -5,6 +5,8 @@ import json
 
 import asyncssh
 
+HOST_KEY_ALGS = ["ssh-ed25519", "ecdsa-sha2-nistp256", "rsa-sha2-512", "rsa-sha2-256"]
+
 
 class AgentError(Exception):
     """The agent refused a request or could not be reached."""
@@ -40,7 +42,9 @@ class Agent:
                 conn = await asyncssh.connect(
                     self._host, port=self._port, username=self._user, client_keys=[self._key],
                     known_hosts=known, agent_path=None, config=[], connect_timeout=10, keepalive_interval=30,
-                    preferred_auth="publickey")
+                    preferred_auth="publickey",
+                    # ed25519 first so the fingerprint shown at setup is the one users are told to check
+                    server_host_key_algs=HOST_KEY_ALGS)
             except asyncssh.PermissionDenied as err:
                 raise AuthFailed(str(err)) from err
             except (OSError, asyncssh.Error) as err:

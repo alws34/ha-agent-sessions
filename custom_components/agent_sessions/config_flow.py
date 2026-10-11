@@ -1,4 +1,6 @@
 """Config flow: server details -> authorize HA's key on the server -> confirm the server's identity. Options per server."""
+import re
+
 import voluptuous as vol
 from homeassistant.components.network import async_get_source_ip
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
@@ -35,6 +37,11 @@ from .const import VERSION as RELEASE
 
 TEXT = sel.TextSelector()
 MULTILINE = sel.TextSelector(sel.TextSelectorConfig(multiline=True))
+
+
+def version(text):
+    m = re.search(r"\d+\.\d+[\w.-]*", text or "")
+    return m.group(0) if m else ""
 
 
 def install_command(ha_address, public_key):
@@ -105,7 +112,7 @@ class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_PORT] = int(self._data[CONF_PORT])
             return self.async_create_entry(title=self._data[CONF_NAME], data=self._data,
                                            options={OPT_DEFAULT_TOOL: tools[0]})
-        found = ", ".join(f"{TOOL_NAMES[t]} {self._info['tools'][t]['version'] or ''}".strip() for t in tools)
+        found = ", ".join(f"{TOOL_NAMES[t]} {version(self._info['tools'][t]['version'])}".strip() for t in tools)
         return self.async_show_form(step_id="confirm", description_placeholders={
             "fingerprint": self._data["fingerprint"], "tools": found, "screen": self._info.get("screen") or "?"})
 
