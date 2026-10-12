@@ -12,6 +12,7 @@ from homeassistant.const import CONF_HOST, CONF_PORT, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .agent import Agent, AgentError
@@ -119,13 +120,14 @@ async def async_setup(hass: HomeAssistant, config):
     async def stop_session(c: ServiceCall):
         await run(c, "stop", {"id": c.data["session"]})
 
-    hass.services.async_register(DOMAIN, "new_session", new_session, vol.Schema({
+    # Admin-only: starting a session is close to shell access on the server.
+    async_register_admin_service(hass, DOMAIN, "new_session", new_session, vol.Schema({
         **base, vol.Required("tool"): vol.In(TOOLS), vol.Optional("folder"): cv.string,
         vol.Optional("args"): args, vol.Optional("name"): cv.string}))
-    hass.services.async_register(DOMAIN, "resume_session", resume_session, vol.Schema({
+    async_register_admin_service(hass, DOMAIN, "resume_session", resume_session, vol.Schema({
         **base, vol.Required("tool"): vol.In(TOOLS), vol.Required("session_id"): cv.string,
         vol.Optional("args"): args}))
-    hass.services.async_register(DOMAIN, "stop_session", stop_session,
+    async_register_admin_service(hass, DOMAIN, "stop_session", stop_session,
                                  vol.Schema({**base, vol.Required("session"): cv.string}))
     return True
 

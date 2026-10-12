@@ -5,12 +5,17 @@ Home Assistant runs this over SSH as a forced command (see install.sh), so it is
 Protocol: SSH_ORIGINAL_COMMAND is "<verb> [base64(json payload)]"; the reply is one JSON line on stdout.
 Verbs: info, list, new, resume, stop, trust. Sessions run in GNU screen; Claude Code and Codex CLI are supported.
 Standard library only, Python 3.9+.
+
+Security: whoever can call this (HA's key) gets to start Claude/Codex, so the agent only accepts the flags in ALLOWED,
+plus exact arguments the server owner lists in ~/.config/agent-sessions/allowed-args ("<tool> <arg>" per line).
+Anything else (a prompt, --settings, --mcp-config, -c overrides) could run commands, and is refused.
+Folders must be inside the home folder.
 """
 import base64, json, os, re, shlex, shutil, sqlite3, subprocess, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1"
+VERSION = "2"
 HOME = Path.home()
 CACHE = HOME / ".cache" / "agent-sessions" / "titles.json"
 PREFIX = "agent-"  # screen names this agent creates
@@ -18,6 +23,15 @@ TOOLS = ("claude", "codex")
 SESSION_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 SCREEN_ID = re.compile(r"^\d+\.[\w.-]+$")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
+EXTRA_ARGS = HOME / ".config" / "agent-sessions" / "allowed-args"
+MODEL = re.compile(r"^[A-Za-z0-9][\w.\[\]-]{0,63}$")
+# flag -> None (no value) or a pattern its value must match. Mirrors the HA flag catalog (const.FLAGS).
+ALLOWED = {
+    "claude": {"--dangerously-skip-permissions": None, "--remote-control": None, "--continue": None,
+               "--verbose": None, "--model": MODEL, "--effort": re.compile(r"^(low|medium|high|xhigh|max)$")},
+    "codex": {"--dangerously-bypass-approvals-and-sandbox": None, "--search": None, "--no-alt-screen": None,
+              "-m": MODEL, "-c": re.compile(r"^model_reasoning_effort=(minimal|low|medium|high)$")},
+}
 
 
 class Fail(Exception):
@@ -329,6 +343,9 @@ def folder(path):
     if not isinstance(path, str) or not path or "\0" in path or "\n" in path:
         raise Fail("invalid folder")
     full = os.path.realpath(os.path.expanduser(path))
+    home = os.path.realpath(HOME)
+    if full != home and not full.startswith(home + os.sep):
+        raise Fail(f"folder must be inside {home}: {path}")
     if not os.path.isdir(full):
         raise Fail(f"folder not found: {path}")
     return full
@@ -348,14 +365,32 @@ def do_trust(p):
     return {"ok": True, "trusted": done}
 
 
-def clean_args(args):
-    if not isinstance(args, list) or len(args) > 40:
-        raise Fail("args must be a list")
-    out = []
-    for a in args:
-        if not isinstance(a, str) or len(a) > 500 or "\0" in a or "\n" in a:
-            raise Fail("invalid argument")
-        out.append(os.path.expanduser(a) if a.startswith("~/") else a)
+def extra_args(tool):
+    try:
+        lines = EXTRA_ARGS.read_text().splitlines()
+    except OSError:
+        return set()
+    return {ln.split(None, 1)[1].strip() for ln in lines if ln.split(None, 1)[0:1] == [tool] and " " in ln.strip()}
+
+
+def clean_args(tool, args):
+    """args, if every one is allowed for tool (see ALLOWED); raises Fail otherwise."""
+    if not isinstance(args, list) or len(args) > 40 or not all(isinstance(a, str) for a in args):
+        raise Fail("args must be a list of strings")
+    allowed, extra, out = ALLOWED[tool], extra_args(tool), []
+    it = iter(args)
+    for a in it:
+        if a in allowed:
+            out.append(a)
+            if allowed[a]:
+                v = next(it, None)
+                if v is None or not allowed[a].match(v):
+                    raise Fail(f"invalid value for {a}")
+                out.append(v)
+        elif a in extra:
+            out.append(a)
+        else:
+            raise Fail(f"argument not allowed: {a[:60]} (the server owner can allow it in {EXTRA_ARGS})")
     return out
 
 
@@ -392,7 +427,7 @@ def launch(tool, path, cwd, args, label, trust):
 def do_new(p):
     tool, path = tool_of(p)
     cwd = folder(p.get("cwd") or "~")
-    args = clean_args(p.get("args", []))
+    args = clean_args(tool, p.get("args", []))
     name = p.get("name") or ""
     if not isinstance(name, str) or len(name) > 80:
         raise Fail("invalid name")
@@ -421,7 +456,7 @@ def do_resume(p):
         raise Fail("invalid session id")
     if sid in live_ids(running()) or resuming(sid):
         raise Fail("that session is already running")
-    args = clean_args(p.get("args", []))
+    args = clean_args(tool, p.get("args", []))
     if tool == "claude":
         found = next((s for s in claude_recent(load_cache()) if s["session_id"] == sid), None)
         argv_ = [*args, "--resume", sid]
