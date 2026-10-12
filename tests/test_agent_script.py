@@ -120,3 +120,24 @@ def test_resume_refused_while_previous_resume_is_starting(agent, monkeypatch):
     assert agent.resuming(sid)
     procs.pop("10")
     assert not agent.resuming(sid)
+
+
+def test_stop_only_touches_listed_sessions(agent, monkeypatch):
+    monkeypatch.setattr(agent, "screens", lambda: [("100", "agent-claude-x"), ("200", "my-irc")])
+    monkeypatch.setattr(agent, "children_map", dict)
+    monkeypatch.setattr(agent, "claude_live", dict)
+    monkeypatch.setattr(agent, "proc_start", lambda pid: None)
+    quit_ = []
+    monkeypatch.setattr(agent.subprocess, "run", lambda cmd, **kw: quit_.append(cmd[2]))
+    assert agent.main("stop " + b64({"id": "200.my-irc"})) == {"error": "no such session"}
+    assert agent.main("stop " + b64({"id": "100.agent-claude-x"})) == {"ok": True}
+    assert quit_ == ["100.agent-claude-x"]
+
+
+def test_sessions_do_not_inherit_the_ssh_request(agent, monkeypatch, tmp_path):
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "new e30=")
+    seen = {}
+    monkeypatch.setattr(agent, "screens", lambda: [("1", "agent-claude-x")] if seen else [])
+    monkeypatch.setattr(agent.subprocess, "run", lambda cmd, **kw: seen.update(kw))
+    agent.launch("claude", "/bin/claude", str(tmp_path), [], "x", False)
+    assert "SSH_ORIGINAL_COMMAND" not in seen["env"]

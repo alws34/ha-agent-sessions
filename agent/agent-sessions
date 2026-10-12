@@ -15,7 +15,7 @@ import base64, json, os, re, shlex, shutil, sqlite3, subprocess, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "2"
+VERSION = "3"
 HOME = Path.home()
 CACHE = HOME / ".cache" / "agent-sessions" / "titles.json"
 PREFIX = "agent-"  # screen names this agent creates
@@ -414,8 +414,10 @@ def launch(tool, path, cwd, args, label, trust):
     while name in taken:
         name, i = f"{PREFIX}{tool}-{slug}-{i}", i + 1
     # bash -li gives the session the user's normal environment (PATH, nvm, pyenv). The screen ends when the tool exits.
+    # Drop HA's request from the session's environment, or running the agent inside a session would replay it.
+    env = {k: v for k, v in os.environ.items() if k != "SSH_ORIGINAL_COMMAND"}
     subprocess.run(["screen", "-dmS", name, "bash", "-lic", shlex.join([path, *args])], cwd=cwd, check=True,
-                   timeout=15)
+                   timeout=15, env=env)
     for _ in range(20):
         sid = next((f"{s}.{n}" for s, n in screens() if n == name), None)
         if sid:
@@ -473,7 +475,7 @@ def do_stop(p):
     sid = p.get("id")
     if not isinstance(sid, str) or not SCREEN_ID.match(sid):
         raise Fail("invalid session")
-    if sid not in {f"{s}.{n}" for s, n in screens()}:
+    if sid not in {r["id"] for r in running()}:  # only screens the card lists, never the user's other screens
         raise Fail("no such session")
     subprocess.run(["screen", "-S", sid, "-X", "quit"], timeout=10)
     return {"ok": True}
@@ -500,4 +502,4 @@ def main(command):
 
 
 if __name__ == "__main__":
-    print(json.dumps(main(os.environ.get("SSH_ORIGINAL_COMMAND") or " ".join(sys.argv[1:]))))
+    print(json.dumps(main(" ".join(sys.argv[1:]) or os.environ.get("SSH_ORIGINAL_COMMAND", ""))))
