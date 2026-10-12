@@ -32,8 +32,8 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
    your host, user and address, for example:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.2/agent/install.sh \
-     | bash -s -- v0.1.2 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
+   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.4/agent/install.sh \
+     | bash -s -- v0.1.4 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
    ```
 
    Run it on the server as that user. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to
@@ -112,26 +112,21 @@ environment. When the tool exits, its screen closes.
 
 ## Security
 
-- **Home Assistant's key can only run the agent.** `command=` forces the agent whatever the client asks for,
-  `restrict` disables shells, port forwarding and agent forwarding, and `from=` only accepts the key from Home
-  Assistant's address.
-- **The agent accepts six verbs** (`info`, `list`, `new`, `resume`, `stop`, `trust`) with a base64 JSON payload,
-  validates every field, and never passes input through a shell unquoted.
-- **The server decides which flags are allowed, not Home Assistant.** The agent accepts only the built-in flags, and
-  checks the model and effort values. A prompt, `--settings`, `--mcp-config` or a Codex `-c` override could run
-  commands, so it refuses them. To allow more, add exact arguments to `~/.config/agent-sessions/allowed-args` on the
+Short version (details, what remains and recommendations in [SECURITY.md](SECURITY.md)):
+
+- **Home Assistant's key can only run the agent**: `command=` forces it, `restrict` disables shells and forwarding,
+  and `from=` accepts the key only from Home Assistant's address.
+- **The server decides what is allowed, not Home Assistant.** The agent accepts six verbs and only the built-in flags
+  (model and effort values are checked). A prompt, `--settings`, `--mcp-config` or a Codex `-c` override could run
+  commands, so they are refused. To allow more, list exact arguments in `~/.config/agent-sessions/allowed-args` on the
   server, one `<tool> <argument>` per line (e.g. `claude --chrome`).
-- **Folders must be inside the user's home folder** (symlinks are resolved first).
-- **Only Home Assistant admins** can call the services.
-- **The server is pinned** at setup; a changed host key is refused.
-- **Where the key lives:** like every Home Assistant integration's credentials, the private key is stored in
-  `/config/.storage/core.config_entries`, unencrypted. Anyone with access to your Home Assistant files or an
-  unencrypted backup can read it. Use encrypted backups. If it leaks, the attacker can do what the card does: start,
-  stop and resume sessions with the allowed flags, from Home Assistant's address only.
-- **What that means:** sessions started with `--dangerously-skip-permissions` (or Codex's bypass flag) can run any
-  command as that user. Together with `--remote-control`, whoever has your Claude account controls those sessions. Consider a dedicated,
-  unprivileged user for the sessions.
+- **Folders must be inside the user's home**, and **Stop only closes sessions the card lists**.
+- **Only Home Assistant admins** can call the services, and **the server's host key is pinned** at setup.
+- **The private key is stored unencrypted** in Home Assistant's `.storage`, so use encrypted backups.
+- Sessions started with the bypass flags can run any command as that user. Consider a dedicated, unprivileged user.
 - Passwords are not supported on purpose.
+
+Found a problem? Report it privately; see [SECURITY.md](SECURITY.md).
 
 ## Remove a server
 
