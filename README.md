@@ -78,7 +78,7 @@ entities:                      # default: every Agent Sessions server
 | Default tool | Claude Code or Codex CLI, when the server has both |
 | Flags ticked by default | Per tool: which built-in flags start ticked in **New session** and are used for **Resume** |
 | Default model / effort | Per tool: values for the model and effort flags |
-| Custom flags | Per tool, one per line (e.g. `--add-dir ~/shared`). Start a line with `*` to tick it by default |
+| Custom flags | Per tool, one per line (e.g. `--chrome`). Start a line with `*` to tick it by default. The server must allow each one too (see [Security](#security)) |
 | Favorite folders | Offered in **New session** |
 | Trusted folders | One per line, subfolders included. The tools won't ask "Do you trust this folder?" there. Written on the server when you save |
 | Also trust any other folder I start a session in | Marks each new session's folder as trusted |
@@ -94,6 +94,8 @@ Built-in flags: Claude Code `--dangerously-skip-permissions`, `--remote-control`
 
 Each server has one sensor, `sensor.<server>_sessions`: the state is the number of running sessions, and the
 attributes carry the running and recent sessions (not recorded in history). Services, for automations and scripts:
+
+These services are admin-only: other Home Assistant users get *Unauthorized*.
 
 - `agent_sessions.new_session`: `config_entry_id`, `tool` (`claude`/`codex`), `folder`, `args` (list), `name`
 - `agent_sessions.resume_session`: `config_entry_id`, `tool`, `session_id`, `args`
@@ -115,14 +117,20 @@ environment. When the tool exits, its screen closes.
   Assistant's address.
 - **The agent accepts six verbs** (`info`, `list`, `new`, `resume`, `stop`, `trust`) with a base64 JSON payload,
   validates every field, and never passes input through a shell unquoted.
+- **The server decides which flags are allowed, not Home Assistant.** The agent accepts only the built-in flags, and
+  checks the model and effort values. A prompt, `--settings`, `--mcp-config` or a Codex `-c` override could run
+  commands, so it refuses them. To allow more, add exact arguments to `~/.config/agent-sessions/allowed-args` on the
+  server, one `<tool> <argument>` per line (e.g. `claude --chrome`).
+- **Folders must be inside the user's home folder** (symlinks are resolved first).
+- **Only Home Assistant admins** can call the services.
 - **The server is pinned** at setup; a changed host key is refused.
 - **Where the key lives:** like every Home Assistant integration's credentials, the private key is stored in
   `/config/.storage/core.config_entries`, unencrypted. Anyone with access to your Home Assistant files or an
   unencrypted backup can read it. Use encrypted backups. If it leaks, the attacker can do what the card does: start,
-  stop and resume sessions, from Home Assistant's address only.
+  stop and resume sessions with the allowed flags, from Home Assistant's address only.
 - **What that means:** sessions started with `--dangerously-skip-permissions` (or Codex's bypass flag) can run any
-  command as that user. So anyone who can press **New session** effectively has a shell on that server as that user.
-  Consider a dedicated, unprivileged user for the sessions, and an admin-only dashboard for the card.
+  command as that user. Together with `--remote-control`, whoever has your Claude account controls those sessions. Consider a dedicated,
+  unprivileged user for the sessions.
 - Passwords are not supported on purpose.
 
 ## Remove a server

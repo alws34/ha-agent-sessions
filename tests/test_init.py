@@ -1,7 +1,8 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import Context
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.agent_sessions import flag_list
@@ -31,7 +32,7 @@ def sensor(hass):
     return hass.states.get("sensor.workstation_sessions")
 
 
-async def test_sensor_and_services(hass):
+async def test_sensor_and_services(hass, hass_read_only_user):
     call = AsyncMock(return_value=LIST)
     entry = await setup(hass, call, {"trust_any": True, "trusted_folders": "~/code\n\n~/scratch"})
     s = sensor(hass)
@@ -51,6 +52,12 @@ async def test_sensor_and_services(hass):
     await hass.services.async_call(DOMAIN, "stop_session", {
         "config_entry_id": entry.entry_id, "session": "123.agent-claude-x"}, blocking=True)
     call.assert_any_call("stop", {"id": "123.agent-claude-x"})
+
+    # admin only: a regular HA user can't start or stop sessions
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(DOMAIN, "new_session", {
+            "config_entry_id": entry.entry_id, "tool": "claude"}, blocking=True,
+            context=Context(user_id=hass_read_only_user.id))
 
     call.side_effect = AgentError("that session is already running")
     with pytest.raises(HomeAssistantError, match="already running"):

@@ -66,7 +66,9 @@ def test_trust_both_tools(agent, tmp_path):
     ("new " + b64({"tool": "bash"}), "unknown tool"),
     ("stop " + b64({"id": "1.x; reboot"}), "invalid session"),
     ("resume " + b64({"tool": "claude", "session_id": "../../etc"}), None),
-    ("trust " + b64({"folders": ["/definitely/not/here"]}), "folder not found"),
+    ("trust " + b64({"folders": ["~/definitely/not/here"]}), "folder not found"),
+    ("trust " + b64({"folders": ["/etc"]}), "inside"),
+    ("new " + b64({"tool": "claude", "args": ["--settings", "{}"]}), "argument not allowed"),
 ])
 def test_rejects_bad_requests(agent, command, error, monkeypatch):
     monkeypatch.setattr(agent, "which", lambda t: "/usr/bin/" + t)
@@ -74,11 +76,39 @@ def test_rejects_bad_requests(agent, command, error, monkeypatch):
     assert "error" in res and (error is None or error in res["error"])
 
 
-def test_clean_args(agent):
-    assert agent.clean_args(["--add-dir", "~/x"]) == ["--add-dir", os.path.expanduser("~/x")]
-    for bad in (["a\nb"], [1], "--x", ["x"] * 41):
+def test_clean_args(agent, tmp_path):
+    ok = ["--dangerously-skip-permissions", "--model", "claude-opus-5-5[1m]", "--effort", "xhigh"]
+    assert agent.clean_args("claude", ok) == ok
+    assert agent.clean_args("codex", ["-c", "model_reasoning_effort=high"]) == ["-c", "model_reasoning_effort=high"]
+    for tool, bad in [
+        ("claude", ["rm -rf ~"]),  # a prompt
+        ("claude", ["--dangerously-skip-permissions", "do something"]),
+        ("claude", ["--settings", '{"hooks":{}}']),
+        ("claude", ["--mcp-config", "x.json"]),
+        ("claude", ["--model"]),
+        ("claude", ["--model", "--settings"]),
+        ("codex", ["-c", "notify=[\"sh\",\"-c\",\"id\"]"]),
+        ("codex", ["--dangerously-skip-permissions"]),  # another tool's flag
+        ("claude", [1]), ("claude", "--verbose"), ("claude", ["--verbose"] * 41),
+    ]:
         with pytest.raises(agent.Fail):
-            agent.clean_args(bad)
+            agent.clean_args(tool, bad)
+    # the server owner can allow more, per tool, exact arguments only
+    agent.EXTRA_ARGS.parent.mkdir(parents=True)
+    agent.EXTRA_ARGS.write_text("# mine\nclaude --chrome\ncodex --oss\n")
+    assert agent.clean_args("claude", ["--chrome"]) == ["--chrome"]
+    with pytest.raises(agent.Fail):
+        agent.clean_args("claude", ["--oss"])
+
+
+def test_folders_must_be_inside_home(agent, tmp_path):
+    (tmp_path / "code").mkdir()
+    assert agent.folder("~/code") == os.path.realpath(tmp_path / "code")
+    assert agent.folder("~") == os.path.realpath(tmp_path)
+    (tmp_path / "out").symlink_to("/tmp")
+    for bad in ("/tmp", "~/../", "~/out", str(tmp_path) + "-evil"):
+        with pytest.raises(agent.Fail, match="inside"):
+            agent.folder(bad)
 
 
 def test_resume_refused_while_previous_resume_is_starting(agent, monkeypatch):
