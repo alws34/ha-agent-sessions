@@ -82,3 +82,12 @@ def test_flag_list():
     assert [f["args"] for f in custom] == [["--add-dir", "~/shared"], ["--profile", "a b"]]  # bad quoting skipped
     assert [f["default"] for f in custom] == [True, False]
     assert next(f for f in flag_list("claude", {}) if f["id"] == "continue")["resume"] is False
+
+
+async def test_tool_installed_after_setup_is_picked_up(hass):
+    info = {"tools": {"claude": {"path": "/bin/claude"}, "codex": {"path": "/bin/codex"}}}
+    call = AsyncMock(side_effect=lambda verb, payload=None: info if verb == "info" else LIST)
+    with patch.dict(DATA, tools=["claude"]):
+        entry = await setup(hass, call, {"default_tool": "claude"})
+    assert entry.data["tools"] == ["claude", "codex"]
+    assert set(sensor(hass).attributes["flags"]) == {"claude", "codex"}

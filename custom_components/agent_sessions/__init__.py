@@ -19,6 +19,7 @@ from .agent import Agent, AgentError
 from .const import (
     CONF_HOST_KEY,
     CONF_PRIVATE_KEY,
+    CONF_TOOLS,
     DEFAULT_FLAGS,
     DEFAULT_VALUES,
     DOMAIN,
@@ -138,11 +139,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: AgentEntry) -> bool:
     coord = Coordinator(hass, entry, agent)
     await coord.async_refresh()  # no raise: an offline server still gets its (offline) slide in the card
     entry.runtime_data = coord
+    if coord.last_update_success:
+        await _update_tools(hass, entry, agent)
     if trusted := lines(entry.options.get(OPT_TRUSTED)):
         entry.async_create_background_task(hass, _trust(coord, trusted), "agent_sessions_trust")
     entry.async_on_unload(entry.add_update_listener(_reload))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _update_tools(hass, entry, agent):
+    """Pick up a tool installed (or removed) on the server since setup; reloading the entry re-checks."""
+    try:
+        info = await agent.call("info")
+    except AgentError:
+        return
+    tools = [t for t in TOOLS if info.get("tools", {}).get(t, {}).get("path")]
+    if tools and tools != entry.data[CONF_TOOLS]:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_TOOLS: tools})
 
 
 async def _trust(coord, folders):
