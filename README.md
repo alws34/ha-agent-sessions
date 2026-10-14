@@ -32,8 +32,8 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
    your host, user and address, for example:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.4/agent/install.sh \
-     | bash -s -- v0.1.4 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
+   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.5/agent/install.sh \
+     | bash -s -- v0.1.5 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
    ```
 
    Run it on the server as that user. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to

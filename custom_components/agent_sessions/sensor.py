@@ -45,7 +45,7 @@ class SessionsSensor(CoordinatorEntity, SensorEntity):
             "integration": DOMAIN, "config_entry_id": e.entry_id, "server": e.title,
             "host": e.data[CONF_HOST], "user": e.data[CONF_USERNAME], "home": data.get("home"),
             "online": ok, "error": None if ok else str(c.last_exception or "unreachable"),
-            "tools": tools, "default_tool": e.options.get(OPT_DEFAULT_TOOL, tools[0]),
+            "tools": tools, "default_tool": d if (d := e.options.get(OPT_DEFAULT_TOOL)) in tools else tools[0],
             "running": data.get("running", []) if ok else [], "recent": data.get("recent", []) if ok else [],
             "flags": {t: flag_list(t, e.options) for t in tools},
             "folders": lines(e.options.get(OPT_FOLDERS, "~")) or ["~"],
