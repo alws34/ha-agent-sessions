@@ -7,9 +7,10 @@ Verbs: info, list, new, resume, stop, trust. Sessions run in GNU screen; Claude 
 Standard library only, Python 3.9+.
 
 Security: whoever can call this (HA's key) gets to start Claude/Codex, so the agent only accepts the flags in ALLOWED,
-plus exact arguments the server owner lists in ~/.config/agent-sessions/allowed-args ("<tool> <arg>" per line).
+plus exact arguments the server owner lists in ~/.config/agent-sessions/allowed-args ("<tool> <args...>" per line,
+e.g. "codex --add-dir ~/shared", which allows those arguments only together).
 Anything else (a prompt, --settings, --mcp-config, -c overrides) could run commands, and is refused.
-Folders must be inside the home folder.
+Folders (new, resumed and trusted) must be inside the home folder.
 """
 import base64, json, os, re, shlex, shutil, sqlite3, subprocess, sys, time
 from datetime import datetime, timezone
@@ -317,8 +318,13 @@ def do_info(_):
 
 
 def _atomic_write(path, text):
+    """Replace path with text, keeping its permissions (~/.claude.json is usually 0600); new files get 0600."""
     tmp = path.with_name(path.name + ".agent-sessions.tmp")
-    tmp.write_text(text)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    tmp.unlink(missing_ok=True)
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
@@ -366,29 +372,43 @@ def do_trust(p):
 
 
 def extra_args(tool):
+    """The argument sequences the server owner allows for tool: one tuple per "<tool> <args...>" line."""
     try:
         lines = EXTRA_ARGS.read_text().splitlines()
     except OSError:
         return set()
-    return {ln.split(None, 1)[1].strip() for ln in lines if ln.split(None, 1)[0:1] == [tool] and " " in ln.strip()}
+    out = set()
+    for ln in lines:
+        try:
+            words = shlex.split(ln)
+        except ValueError:
+            continue  # unbalanced quotes
+        if len(words) > 1 and words[0] == tool:
+            out.add(tuple(words[1:]))
+    return out
 
 
 def clean_args(tool, args):
-    """args, if every one is allowed for tool (see ALLOWED); raises Fail otherwise."""
+    """args, if every one is allowed for tool (see ALLOWED and EXTRA_ARGS); raises Fail otherwise."""
     if not isinstance(args, list) or len(args) > 40 or not all(isinstance(a, str) for a in args):
         raise Fail("args must be a list of strings")
-    allowed, extra, out = ALLOWED[tool], extra_args(tool), []
-    it = iter(args)
-    for a in it:
-        if a in allowed:
+    allowed, extra, out, i = ALLOWED[tool], extra_args(tool), [], 0
+    while i < len(args):
+        a = args[i]
+        # an allowed-args line matches only as a whole sequence, so "--add-dir ~/shared" never allows another dir
+        seq = max((s for s in extra if tuple(args[i:i + len(s)]) == s), key=len, default=None)
+        if seq:
+            out += [os.path.expanduser(w) for w in seq]  # the session's command is quoted, so bash won't expand ~
+            i += len(seq)
+        elif a in allowed:
             out.append(a)
             if allowed[a]:
-                v = next(it, None)
+                v = args[i + 1] if i + 1 < len(args) else None
                 if v is None or not allowed[a].match(v):
                     raise Fail(f"invalid value for {a}")
                 out.append(v)
-        elif a in extra:
-            out.append(a)
+                i += 1
+            i += 1
         else:
             raise Fail(f"argument not allowed: {a[:60]} (the server owner can allow it in {EXTRA_ARGS})")
     return out
@@ -467,7 +487,7 @@ def do_resume(p):
         argv_ = ["resume", *args, sid]
     if found is None:
         raise Fail("session not found")
-    cwd = found["cwd"] if os.path.isdir(found["cwd"] or "") else str(HOME)
+    cwd = folder(found["cwd"]) if os.path.isdir(found["cwd"] or "") else str(HOME)  # inside home, like new sessions
     return launch(tool, path, cwd, argv_, p.get("name") or found["title"], bool(p.get("trust")))
 
 
