@@ -57,6 +57,9 @@ def test_trust_both_tools(agent, tmp_path):
     agent.trust_dir("codex", "/x/y")  # idempotent
     toml = (tmp_path / ".codex" / "config.toml").read_text()
     assert toml.count('[projects."/x/y"]') == 1 and 'trust_level = "trusted"' in toml
+    (tmp_path / ".claude.json").chmod(0o600)
+    agent.trust_dir("claude", str(tmp_path))
+    assert (tmp_path / ".claude.json").stat().st_mode & 0o777 == 0o600  # rewriting doesn't loosen it
 
 
 @pytest.mark.parametrize(("command", "error"), [
@@ -99,6 +102,13 @@ def test_clean_args(agent, tmp_path):
     assert agent.clean_args("claude", ["--chrome"]) == ["--chrome"]
     with pytest.raises(agent.Fail):
         agent.clean_args("claude", ["--oss"])
+    # a line with a value allows that exact sequence only, and ~ reaches the tool as the home folder
+    agent.EXTRA_ARGS.write_text("codex --add-dir ~/shared\ncodex --profile 'a b'\n")
+    assert agent.clean_args("codex", ["--add-dir", "~/shared", "--search"]) == ["--add-dir", f"{tmp_path}/shared", "--search"]
+    assert agent.clean_args("codex", ["--profile", "a b"]) == ["--profile", "a b"]
+    for bad in (["--add-dir"], ["--add-dir", "/etc"], ["~/shared"], ["--add-dir", "--search"]):
+        with pytest.raises(agent.Fail):
+            agent.clean_args("codex", bad)
 
 
 def test_folders_must_be_inside_home(agent, tmp_path):
@@ -120,6 +130,17 @@ def test_resume_refused_while_previous_resume_is_starting(agent, monkeypatch):
     assert agent.resuming(sid)
     procs.pop("10")
     assert not agent.resuming(sid)
+
+
+def test_resume_refuses_folders_outside_home(agent, monkeypatch):
+    sid = "b63eba06-b9de-4360-b686-8744a2707765"
+    monkeypatch.setattr(agent, "which", lambda t: "/usr/bin/" + t)
+    monkeypatch.setattr(agent, "running", lambda cache=None: [])
+    monkeypatch.setattr(agent, "resuming", lambda s: False)
+    monkeypatch.setattr(agent, "claude_recent", lambda cache: [{"session_id": sid, "cwd": "/tmp", "title": "t"}])
+    monkeypatch.setattr(agent, "launch", lambda *a: pytest.fail("launched outside home"))
+    res = agent.main("resume " + b64({"tool": "claude", "session_id": sid, "trust": True}))
+    assert "inside" in res["error"]
 
 
 def test_stop_only_touches_listed_sessions(agent, monkeypatch):

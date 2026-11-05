@@ -17,7 +17,7 @@ Home Assistant gets an SSH key per server. That key can only do what the card do
 | `from="<HA address>"` | The key is refused from any other address. |
 | Agent: six verbs | `info`, `list`, `new`, `resume`, `stop`, `trust`. Payloads are validated, and nothing goes through a shell unquoted. |
 | Agent: flag allowlist | Only the built-in flags, plus exact arguments the server owner lists in `~/.config/agent-sessions/allowed-args`. Prompts, `--settings`, `--mcp-config`, `--append-system-prompt` and Codex `-c` overrides (other than reasoning effort) are refused. |
-| Agent: folders | New sessions and trusted folders must be inside the user's home (symlinks resolved). |
+| Agent: folders | New sessions, resumed sessions and trusted folders must be inside the user's home (symlinks resolved). |
 | Agent: stop | Only sessions the card lists (Claude Code / Codex screens and the agent's own `agent-*` screens), never the user's other screens. |
 | Integration | The services are admin-only, so other Home Assistant users get *Unauthorized*. The server's host key is pinned at setup; a changed key is refused. |
 
@@ -36,8 +36,6 @@ user (`screen -r`) or through the Claude app (`--remote-control`, i.e. whoever h
   home, or use a dedicated user.
 - **Bypass flags.** `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` let the session
   run any command as that user without asking. Combined with `--remote-control`, your Claude account controls them.
-- **Resume uses the folder the session ran in**, which is read from the tool's own records on the server and may be
-  outside your home.
 - **Non-admin Home Assistant users can read session titles and folders** in the sensor's attributes (they can't start
   or stop anything).
 - **No rate limit.** The key can start many sessions (CPU, memory, model usage).

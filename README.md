@@ -32,8 +32,8 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
    your host, user and address, for example:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.5/agent/install.sh \
-     | bash -s -- v0.1.5 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
+   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.6/agent/install.sh \
+     | bash -s -- v0.1.6 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
    ```
 
    Run it on the server as that user. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to
@@ -119,7 +119,8 @@ Short version (details, what remains and recommendations in [SECURITY.md](SECURI
 - **The server decides what is allowed, not Home Assistant.** The agent accepts six verbs and only the built-in flags
   (model and effort values are checked). A prompt, `--settings`, `--mcp-config` or a Codex `-c` override could run
   commands, so they are refused. To allow more, list exact arguments in `~/.config/agent-sessions/allowed-args` on the
-  server, one `<tool> <argument>` per line (e.g. `claude --chrome`).
+  server, one `<tool> <arguments>` per line (e.g. `claude --chrome`, or `codex --add-dir ~/shared`, which allows
+  those two only together).
 - **Folders must be inside the user's home**, and **Stop only closes sessions the card lists**.
 - **Only Home Assistant admins** can call the services, and **the server's host key is pinned** at setup.
 - **The private key is stored unencrypted** in Home Assistant's `.storage`, so use encrypted backups.
