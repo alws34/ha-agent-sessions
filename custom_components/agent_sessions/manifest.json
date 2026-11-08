@@ -8,6 +8,6 @@
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/alws34/ha-agent-sessions/issues",
-  "requirements": ["asyncssh>=2.14"],
-  "version": "0.1.6"
+  "requirements": ["asyncssh>=2.14.2"],
+  "version": "0.2.0"
 }

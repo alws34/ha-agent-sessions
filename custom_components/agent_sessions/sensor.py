@@ -5,10 +5,11 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import flag_list, lines
-from .const import CONF_TOOLS, DOMAIN, OPT_CONFIRM_STOP, OPT_DEFAULT_TOOL, OPT_FOLDERS
+from .const import AGENT_VERSION, CONF_TOOLS, DOMAIN, OPT_CONFIRM_STOP, OPT_DEFAULT_TOOL, OPT_FOLDERS, OPT_POSITION
 
 ATTRS = frozenset({"integration", "config_entry_id", "server", "host", "user", "home", "online", "error", "tools",
-                   "default_tool", "running", "recent", "flags", "folders", "confirm_stop"})
+                   "default_tool", "running", "recent", "flags", "folders", "confirm_stop", "position", "allowed",
+                   "agent_outdated"})
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -50,4 +51,8 @@ class SessionsSensor(CoordinatorEntity, SensorEntity):
             "flags": {t: flag_list(t, e.options) for t in tools},
             "folders": lines(e.options.get(OPT_FOLDERS, "~")) or ["~"],
             "confirm_stop": e.options.get(OPT_CONFIRM_STOP, True),
+            "position": int(e.options.get(OPT_POSITION, 1)),
+            # exact argument sequences the server allows beyond the built-in flags (None: agent too old to say)
+            "allowed": data.get("allowed") if ok else None,
+            "agent_outdated": ok and data.get("agent") != AGENT_VERSION,
         }

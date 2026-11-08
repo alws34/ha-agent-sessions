@@ -127,7 +127,11 @@ def test_resume_refused_while_previous_resume_is_starting(agent, monkeypatch):
              "11": ["vim", f"notes-{sid}.md"]}  # mentions the id but is not a resume
     monkeypatch.setattr(agent.os, "listdir", lambda path: list(procs) if path == "/proc" else [])
     monkeypatch.setattr(agent, "argv", lambda pid: procs.get(str(pid), []))
+    monkeypatch.setattr(agent, "proc_uid", lambda pid: os.getuid())
     assert agent.resuming(sid)
+    monkeypatch.setattr(agent, "proc_uid", lambda pid: os.getuid() + 1)
+    assert not agent.resuming(sid)  # another user's process can't block our resume
+    monkeypatch.setattr(agent, "proc_uid", lambda pid: os.getuid())
     procs.pop("10")
     assert not agent.resuming(sid)
 
@@ -157,8 +161,161 @@ def test_stop_only_touches_listed_sessions(agent, monkeypatch):
 
 def test_sessions_do_not_inherit_the_ssh_request(agent, monkeypatch, tmp_path):
     monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "new e30=")
+    monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("PATH_KEEP_ME", "1")
     seen = {}
     monkeypatch.setattr(agent, "screens", lambda: [("1", "agent-claude-x")] if seen else [])
     monkeypatch.setattr(agent.subprocess, "run", lambda cmd, **kw: seen.update(kw))
     agent.launch("claude", "/bin/claude", str(tmp_path), [], "x", False)
-    assert "SSH_ORIGINAL_COMMAND" not in seen["env"]
+    assert not {"SSH_ORIGINAL_COMMAND", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"} & set(seen["env"])
+    assert seen["env"]["PATH_KEEP_ME"] == "1"
+
+
+SID = "b63eba06-b9de-4360-b686-8744a2707765"
+
+
+def claude_session(home, sid=SID, cwd=None, project="-code"):
+    return transcript(home, sid, [
+        {"type": "user", "cwd": cwd or str(home), "sessionId": sid,
+         "message": {"role": "user", "content": "fix the login bug"}},
+        {"type": "ai-title", "aiTitle": "Fix login bug", "sessionId": sid}])
+
+
+def no_running(agent, monkeypatch):
+    monkeypatch.setattr(agent, "running", lambda cache=None: [])
+    monkeypatch.setattr(agent, "claude_live", dict)
+
+
+def test_move_a_session_between_servers(agent, tmp_path, monkeypatch):
+    no_running(agent, monkeypatch)
+    src = claude_session(tmp_path, cwd="/home/other/code")
+    out = agent.main("export " + b64({"tool": "claude", "session_id": SID}))
+    assert out["title"] == "Fix login bug" and out["cwd"] == "/home/other/code"
+    body = src.read_bytes()
+    src.unlink()  # now "this" home is the other server
+    (tmp_path / "code").mkdir()
+    res = agent.main("import " + b64({"tool": "claude", "session_id": SID, "cwd": "~/code"}), out["data"])
+    assert res == {"ok": True, "cwd": str(tmp_path / "code")}
+    dest = tmp_path / ".claude" / "projects" / agent.project_dir(str(tmp_path / "code")).name / f"{SID}.jsonl"
+    assert dest.read_bytes() == body and dest.stat().st_mode & 0o777 == 0o600
+    assert dest.parent.name == str(tmp_path / "code").replace("/", "-").replace("_", "-").replace(".", "-")
+    # never overwrites a transcript that is already there
+    again = agent.main("import " + b64({"tool": "claude", "session_id": SID, "cwd": "~/code"}), out["data"])
+    assert "already on this server" in again["error"]
+
+
+def test_import_checks_what_it_writes(agent, tmp_path, monkeypatch):
+    import gzip
+    no_running(agent, monkeypatch)
+
+    def imp(data, **p):
+        return agent.main("import " + b64({"tool": "claude", "session_id": SID, **p}), data)
+
+    def pack(raw):
+        return base64.b64encode(gzip.compress(raw)).decode()
+
+    other = json.dumps({"sessionId": "a" * 8 + "-1111-1111-1111-" + "1" * 12}).encode()
+    assert "not a transcript of this session" in imp(pack(other))["error"]
+    assert "damaged" in imp("not base64!")["error"]
+    assert "damaged" in imp(pack(b"not json\n"))["error"]
+    assert "inside" in imp(pack(b"{}"), cwd="/tmp")["error"]
+    assert "only Claude Code" in imp(pack(b"{}"), tool="codex")["error"]
+    monkeypatch.setattr(agent, "MAX_TRANSFER", 1000)
+    bomb = pack(b'{"sessionId":"' + SID.encode() + b'"}\n' + b" " * 5000)
+    assert "larger than" in imp(bomb)["error"]
+    assert not list((tmp_path / ".claude").rglob("*.jsonl")) if (tmp_path / ".claude").exists() else True
+
+
+def test_export_refuses_running_and_unknown(agent, tmp_path, monkeypatch):
+    claude_session(tmp_path)
+    monkeypatch.setattr(agent, "running", lambda cache=None: [{"session_id": SID}])
+    monkeypatch.setattr(agent, "claude_live", dict)
+    assert "running" in agent.main("export " + b64({"session_id": SID}))["error"]
+    no_running(agent, monkeypatch)
+    assert "not found" in agent.main("export " + b64({"session_id": "c" + SID[1:]}))["error"]
+    assert "only Claude" in agent.main("export " + b64({"tool": "codex", "session_id": SID}))["error"]
+
+
+def test_resume_folder_override_and_no_trust_of_home(agent, tmp_path, monkeypatch):
+    claude_session(tmp_path, cwd="/gone/away")
+    monkeypatch.setattr(agent, "which", lambda t: "/usr/bin/" + t)
+    no_running(agent, monkeypatch)
+    monkeypatch.setattr(agent, "resuming", lambda s: False)
+    seen = []
+    monkeypatch.setattr(agent, "launch", lambda *a: seen.append(a) or {"ok": True})
+    agent.main("resume " + b64({"tool": "claude", "session_id": SID, "trust": True,
+                                "args": ["--remote-control", "--fork-session"]}))
+    _tool, _path, cwd, argv_, name, trust = seen[-1]
+    assert cwd == str(tmp_path) and trust is False  # folder gone: home, but home is never trusted wholesale
+    assert argv_ == ["--remote-control", "--fork-session", "--resume", SID] and name == "Fix login bug"
+    (tmp_path / "code").mkdir()
+    agent.main("resume " + b64({"tool": "claude", "session_id": SID, "trust": True, "cwd": "~/code"}))
+    assert seen[-1][2] == str(tmp_path / "code") and seen[-1][5] is True
+    assert "inside" in agent.main("resume " + b64({"tool": "claude", "session_id": SID, "cwd": "/tmp"}))["error"]
+
+
+def test_remote_control_goes_last(agent, tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(agent, "screens", lambda: [("1", "agent-claude-x")] if seen else [])
+    monkeypatch.setattr(agent.subprocess, "run", lambda cmd, **kw: seen.update(cmd=cmd))
+    agent.launch("claude", "/bin/claude", str(tmp_path), ["--remote-control", "--resume", SID, "--name", "x"], "x", False)
+    assert seen["cmd"][-1] == f"/bin/claude --resume {SID} --name x --remote-control"
+
+
+def test_values_must_match_whole(agent):
+    for tool, bad in [("claude", ["--model", "opus\n"]), ("claude", ["--effort", "high\n"]),
+                      ("codex", ["-c", "model_reasoning_effort=high\n"])]:
+        with pytest.raises(agent.Fail):
+            agent.clean_args(tool, bad)
+    for e in ("none", "xhigh"):
+        assert agent.clean_args("codex", ["-c", f"model_reasoning_effort={e}"])
+    assert "invalid session id" in agent.main("resume " + b64({"tool": "claude", "session_id": SID + "\n"}))["error"]
+
+
+def test_stop_in_users_own_screen_stops_only_the_tool(agent, monkeypatch):
+    monkeypatch.setattr(agent, "running", lambda cache=None: [
+        {"id": "200.work", "name": "work", "pid": 4242}, {"id": "100.agent-claude-x", "name": "agent-claude-x"}])
+    killed, quit_ = [], []
+    monkeypatch.setattr(agent.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(agent.subprocess, "run", lambda cmd, **kw: quit_.append(cmd[2]))
+    assert agent.main("stop " + b64({"id": "200.work"})) == {"ok": True}
+    assert killed == [(4242, agent.signal.SIGTERM)] and quit_ == []
+    agent.main("stop " + b64({"id": "100.agent-claude-x"}))
+    assert quit_ == ["100.agent-claude-x"]
+
+
+def test_codex_trust_keeps_config_readable(agent, tmp_path):
+    import tomllib
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+    cfg.write_text('[projects]\n"/x/a" = { trust_level = "trusted" }\n')
+    agent.trust_dir("codex", "/x/a")  # already listed another way: unchanged
+    assert cfg.read_text().count("/x/a") == 1
+    agent.trust_dir("codex", "/x/proj😀")
+    assert "/x/proj😀" in tomllib.loads(cfg.read_text())["projects"]
+    with pytest.raises(agent.Fail):
+        agent.folder("~/a\tb")
+
+
+def test_atomic_write_keeps_symlinks(agent, tmp_path):
+    real = tmp_path / "dotfiles" / "claude.json"
+    real.parent.mkdir()
+    real.write_text("{}")
+    (tmp_path / ".claude.json").symlink_to(real)
+    agent.trust_dir("claude", str(tmp_path))
+    assert (tmp_path / ".claude.json").is_symlink() and "hasTrustDialogAccepted" in real.read_text()
+
+
+def test_sessions_lists_open_ones_too(agent, tmp_path, monkeypatch):
+    claude_session(tmp_path)
+    monkeypatch.setattr(agent, "running", lambda cache=None: [{"session_id": SID}])
+    monkeypatch.setattr(agent, "claude_live", dict)
+    out = agent.main("sessions " + b64({"limit": 50}))
+    assert out["agent"] == agent.VERSION and [(s["session_id"], s["open"]) for s in out["sessions"]] == [(SID, True)]
+    assert "limit" in agent.main("sessions " + b64({"limit": "x"}))["error"]
+
+
+def test_deep_json_is_a_bad_request(agent):
+    deep = base64.b64encode(("[" * 100000 + "]" * 100000).encode()).decode()
+    assert "error" in agent.main("list " + deep)

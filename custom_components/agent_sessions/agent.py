@@ -6,6 +6,8 @@ import json
 import asyncssh
 
 HOST_KEY_ALGS = ["ssh-ed25519", "ecdsa-sha2-nistp256", "rsa-sha2-512", "rsa-sha2-256"]
+RETRY_SAFE = frozenset({"info", "list", "sessions", "export"})  # read-only verbs
+TIMEOUT = {"export": 180, "import": 180}  # seconds; moving a large transcript takes a while
 
 
 class AgentError(Exception):
@@ -14,6 +16,12 @@ class AgentError(Exception):
 
 class AuthFailed(AgentError):
     """The server rejected Home Assistant's key (installer not run, or key line removed)."""
+
+
+def public_key(private_key):
+    """The OpenSSH public key line for a stored private key (for the install command)."""
+    key = asyncssh.import_private_key(private_key)
+    return key.export_public_key().decode().strip()  # keeps the "home-assistant-agent-sessions" comment
 
 
 def new_key():
@@ -53,17 +61,20 @@ class Agent:
             self._conn = conn
             return conn
 
-    async def call(self, verb, payload=None):
+    async def call(self, verb, payload=None, stdin=None):
+        """Run one agent verb. stdin carries bulk data (import); everything else goes in the command line."""
         cmd = verb + (" " + base64.b64encode(json.dumps(payload).encode()).decode() if payload else "")
-        for attempt in (1, 2):  # the kept-open connection may have died (server reboot); retry once on a new one
+        for attempt in (1, 2):
             conn = await self._connect()
             try:
-                res = await conn.run(cmd, check=False, timeout=60)
+                res = await conn.run(cmd, input=stdin, check=False, timeout=TIMEOUT.get(verb, 60))
                 break
             except (TimeoutError, OSError, asyncssh.Error) as err:
                 await self.close()
-                if attempt == 2:
-                    raise AgentError(f"{self._host}: {err}") from err
+                # The kept-open connection may have died (server reboot): retry once on a new one. Verbs that start
+                # or change something only when the command surely never ran, or a slow reply would start it twice.
+                if attempt == 2 or (verb not in RETRY_SAFE and not isinstance(err, asyncssh.ChannelOpenError)):
+                    raise AgentError(f"{self._host}: {err or type(err).__name__}") from err
         out = (res.stdout or "").strip().splitlines()
         try:
             data = json.loads(out[-1])

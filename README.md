@@ -7,6 +7,7 @@ Start, stop and resume **Claude Code** and **Codex CLI** sessions on your server
   them over SSH (`screen -r`) or continue them in the Claude app (`--remote-control`).
 - A bundled dashboard card: one slide per server, running sessions with **Stop**, recent sessions with **Resume**, and
   **New session** with a checklist of command-line flags (defaults per server).
+- **Move a session between servers**: pick a Claude Code session from any server and continue it on another one.
 - Home Assistant reaches each server over SSH with its own key, which can **only** run the Agent Sessions agent.
 
 ## Requirements
@@ -32,8 +33,8 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
    your host, user and address, for example:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.1.6/agent/install.sh \
-     | bash -s -- v0.1.6 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
+   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.2.0/agent/install.sh \
+     | bash -s -- v0.2.0 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
    ```
 
    Run it on the server as that user. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to
@@ -55,19 +56,33 @@ The card is loaded automatically; add it from the card picker (**Agent Sessions*
 
 ```yaml
 type: custom:agent-sessions-card
-# optional:
+# optional (the card editor sets these for you):
 recent: 3                      # recent sessions shown before "Show more" (default 3)
-entities:                      # default: every Agent Sessions server
+order:                         # servers in this order first; the rest by their Position option, then name
   - sensor.workstation_sessions
+hide:                          # servers this card doesn't show
+  - sensor.laptop_sessions
 ```
 
-- **‹ ›**, the server chips, or a swipe switch servers.
+The older `entities:` list still works: exactly those servers, in that order.
+
+- **‹ ›**, the server chips, or a swipe switch servers. The card remembers the server you picked (per browser or
+  phone), so it opens on it again after you change views or reopen the app.
+- A **green dot** next to a server's name means Home Assistant reached it on the last check; **red** means it couldn't
+  (the reason is shown on its slide).
 - **■ Stop** asks first (can be turned off per server), then closes the session's screen.
 - **▶ Resume** starts the session again in a new screen, in the folder it ran in, with that server's default flags.
   Sessions that are already open (in a screen, a terminal or the desktop app) are not offered, and the agent refuses
   to resume them twice.
 - **+ New session** opens the checklist: tool (if the server has both), folder (favorites or any path), optional
-  name, and the flags. The bottom of the dialog shows the exact command.
+  name, and the flags. The bottom of the dialog shows the exact command. A flag that needs a value (Codex `-m` has no
+  default) can only be ticked once it has one; a custom flag the server doesn't allow is marked *not allowed on
+  server*.
+- Tick **--resume** (or **All sessions ›** above Recent) to pick a session from **any** server. A session from this
+  server resumes in the folder it ran in. A Claude Code session from another server is copied here first and resumed
+  in the same folder under this server's home (change it in the dialog); the original stays where it was. Add
+  **--fork-session** to continue it under a new ID. Codex sessions can only resume on their own server.
+- Only Home Assistant admins see New, Stop and Resume.
 
 ## Options (per server)
 
@@ -85,10 +100,12 @@ entities:                      # default: every Agent Sessions server
 | Recent sessions to show | How many past sessions the server reports |
 | Check the server for changes every | Poll interval (seconds) |
 | Ask before stopping a session | Inline confirmation on **Stop** |
+| Position in the card | Server order in cards that don't set their own (lower first, then by name) |
 
-Built-in flags: Claude Code `--dangerously-skip-permissions`, `--remote-control`, `--continue`, `--model`, `--effort`,
-`--verbose`; Codex CLI `--dangerously-bypass-approvals-and-sandbox`, `--search`, `-m`, reasoning effort
-(`-c model_reasoning_effort=…`), `--no-alt-screen`.
+Built-in flags: Claude Code `--dangerously-skip-permissions`, `--remote-control`, `--continue`, `--fork-session`
+(with resume), `--model`, `--effort`, `--verbose`; Codex CLI `--dangerously-bypass-approvals-and-sandbox`, `--search`,
+`-m`, reasoning effort (`-c model_reasoning_effort=none…xhigh`), `--no-alt-screen`. Checked against Claude Code 2.1.319
+and Codex CLI 0.167. `--remote-control` always goes last on the command line, because it takes an optional name.
 
 ## Entities and services
 
@@ -98,7 +115,9 @@ attributes carry the running and recent sessions (not recorded in history). Serv
 These services are admin-only: other Home Assistant users get *Unauthorized*.
 
 - `agent_sessions.new_session`: `config_entry_id`, `tool` (`claude`/`codex`), `folder`, `args` (list), `name`
-- `agent_sessions.resume_session`: `config_entry_id`, `tool`, `session_id`, `args`
+- `agent_sessions.resume_session`: `config_entry_id`, `tool`, `session_id`, `args`, optional `folder`, `name`, and
+  `from_config_entry_id` (copy a Claude Code session from that server first)
+- `agent_sessions.list_sessions`: resumable sessions on every server (returns a response; the card's picker uses it)
 - `agent_sessions.stop_session`: `config_entry_id`, `session` (the screen ID, `pid.name`)
 
 ## How it works
@@ -110,13 +129,17 @@ Codex's `~/.codex/state_*.sqlite`. **It does not contact Anthropic or OpenAI and
 New sessions run as `screen -dmS agent-<tool>-<name> bash -lic '<tool> <flags>'`, so they get your normal login
 environment. When the tool exits, its screen closes.
 
+Moving a session: Home Assistant asks the source server's agent for the transcript (`export`, gzipped), passes it to
+the target server's agent on stdin (`import`), which writes it to `~/.claude/projects/<folder>/<id>.jsonl`, and then
+resumes it there. Transcripts up to 64 MB; running sessions can't be moved (stop them first).
+
 ## Security
 
 Short version (details, what remains and recommendations in [SECURITY.md](SECURITY.md)):
 
 - **Home Assistant's key can only run the agent**: `command=` forces it, `restrict` disables shells and forwarding,
   and `from=` accepts the key only from Home Assistant's address.
-- **The server decides what is allowed, not Home Assistant.** The agent accepts six verbs and only the built-in flags
+- **The server decides what is allowed, not Home Assistant.** The agent accepts nine verbs and only the built-in flags
   (model and effort values are checked). A prompt, `--settings`, `--mcp-config` or a Codex `-c` override could run
   commands, so they are refused. To allow more, list exact arguments in `~/.config/agent-sessions/allowed-args` on the
   server, one `<tool> <arguments>` per line (e.g. `claude --chrome`, or `codex --add-dir ~/shared`, which allows
@@ -129,6 +152,13 @@ Short version (details, what remains and recommendations in [SECURITY.md](SECURI
 
 Found a problem? Report it privately; see [SECURITY.md](SECURITY.md).
 
+## Update
+
+Update the integration in HACS and restart Home Assistant. When a release needs a newer agent on the servers (0.2.0
+does), **Settings → Repairs** shows the install command for each server; run it there as before. It replaces the agent
+and keeps the same key. Until then the card says the agent is out of date, and the new features don't work on that
+server.
+
 ## Remove a server
 
 Delete the entry in Home Assistant, then on the server remove the `home-assistant-agent-sessions` line from
@@ -138,7 +168,8 @@ Delete the entry in Home Assistant, then on the server remove the `home-assistan
 
 - Codex CLI status (working/idle) and titles come from Codex's internal SQLite database. If a Codex update changes
   it, Codex sessions still start and stop but may show without a title or status.
-- Resume uses the server's default flags; pick different flags with **New session** + `--continue`.
+- **▶ Resume** uses the server's default flags; pick different flags with **New session** + **--resume**.
+- Only Claude Code sessions move between servers. Codex keeps its sessions in its own databases.
 
 ## Development
 
