@@ -27,6 +27,13 @@ resume_session:
       selector: { text: }
     args:
       selector: { object: }
+    folder:
+      example: "~/code/webapp"
+      selector: { text: }
+    name:
+      selector: { text: }
+    from_config_entry_id:
+      selector: { config_entry: { integration: agent_sessions } }
 stop_session:
   fields:
     config_entry_id:
@@ -36,3 +43,10 @@ stop_session:
       required: true
       example: "12345.agent-claude-bugfix"
       selector: { text: }
+list_sessions:
+  fields:
+    config_entry_id:
+      selector: { config_entry: { integration: agent_sessions } }
+    limit:
+      default: 100
+      selector: { number: { min: 1, max: 300, mode: box } }

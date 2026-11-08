@@ -3,20 +3,27 @@
 
 Home Assistant runs this over SSH as a forced command (see install.sh), so it is the only thing HA's key can do.
 Protocol: SSH_ORIGINAL_COMMAND is "<verb> [base64(json payload)]"; the reply is one JSON line on stdout.
-Verbs: info, list, new, resume, stop, trust. Sessions run in GNU screen; Claude Code and Codex CLI are supported.
+Verbs: info, list, sessions, new, resume, stop, trust, export, import. Sessions run in GNU screen; Claude Code and
+Codex CLI are supported. "import" reads its data (base64 of a gzipped transcript) from stdin, not the command line.
 Standard library only, Python 3.9+.
 
 Security: whoever can call this (HA's key) gets to start Claude/Codex, so the agent only accepts the flags in ALLOWED,
 plus exact arguments the server owner lists in ~/.config/agent-sessions/allowed-args ("<tool> <args...>" per line,
 e.g. "codex --add-dir ~/shared", which allows those arguments only together).
 Anything else (a prompt, --settings, --mcp-config, -c overrides) could run commands, and is refused.
-Folders (new, resumed and trusted) must be inside the home folder.
+Folders (new, resumed and trusted) must be inside the home folder. export/import move a Claude Code transcript
+between servers (HA copies it), only to and from ~/.claude/projects, size-capped and checked.
 """
-import base64, json, os, re, shlex, shutil, sqlite3, subprocess, sys, time
+import base64, gzip, json, os, re, shlex, shutil, signal, sqlite3, subprocess, sys, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "3"
+try:
+    import tomllib  # Python 3.11+; older servers skip the extra TOML checks
+except ImportError:
+    tomllib = None
+
+VERSION = "4"  # the HA integration warns when a server runs an older agent (const.AGENT_VERSION)
 HOME = Path.home()
 CACHE = HOME / ".cache" / "agent-sessions" / "titles.json"
 PREFIX = "agent-"  # screen names this agent creates
@@ -26,13 +33,17 @@ SCREEN_ID = re.compile(r"^\d+\.[\w.-]+$")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
 EXTRA_ARGS = HOME / ".config" / "agent-sessions" / "allowed-args"
 MODEL = re.compile(r"^[A-Za-z0-9][\w.\[\]-]{0,63}$")
-# flag -> None (no value) or a pattern its value must match. Mirrors the HA flag catalog (const.FLAGS).
+# flag -> None (no value) or a pattern its whole value must match (fullmatch). Mirrors the HA catalog (const.FLAGS).
 ALLOWED = {
     "claude": {"--dangerously-skip-permissions": None, "--remote-control": None, "--continue": None,
-               "--verbose": None, "--model": MODEL, "--effort": re.compile(r"^(low|medium|high|xhigh|max)$")},
+               "--verbose": None, "--fork-session": None, "--model": MODEL,
+               "--effort": re.compile(r"(low|medium|high|xhigh|max)")},
     "codex": {"--dangerously-bypass-approvals-and-sandbox": None, "--search": None, "--no-alt-screen": None,
-              "-m": MODEL, "-c": re.compile(r"^model_reasoning_effort=(minimal|low|medium|high)$")},
+              "-m": MODEL, "-c": re.compile(r"model_reasoning_effort=(none|minimal|low|medium|high|xhigh)")},
 }
+# "--remote-control [name]" takes an optional value, so it always goes last: nothing after it can become its name.
+LAST = "--remote-control"
+MAX_TRANSFER = 64 * 1024 * 1024  # largest transcript export/import moves (uncompressed)
 
 
 class Fail(Exception):
@@ -113,6 +124,13 @@ def proc_cwd(pid):
         return ""
 
 
+def proc_uid(pid):
+    try:
+        return os.stat(f"/proc/{pid}").st_uid
+    except OSError:
+        return None
+
+
 def proc_start(pid):
     try:
         return os.stat(f"/proc/{pid}").st_mtime
@@ -163,10 +181,16 @@ def claude_meta(path, cache):
     return title, cwd_s
 
 
-def claude_recent(cache):
+def claude_files():
+    return sorted((HOME / ".claude" / "projects").glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def claude_recent(cache, limit=200):
     out = []
-    files = sorted((HOME / ".claude" / "projects").glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for p in files[:200]:
+    files = claude_files()
+    for k in [k for k in cache if not os.path.exists(k)]:  # transcripts deleted since they were cached
+        del cache[k]
+    for p in files[:limit]:
         title, cwd = claude_meta(p, cache)
         if title:
             out.append({"tool": "claude", "session_id": p.stem, "title": title, "cwd": cwd,
@@ -257,14 +281,14 @@ def running(cache=None):
             sid = claude.get("sessionId")
             if not titles:
                 titles.update({s["session_id"]: s["title"] for s in claude_recent(cache)})
-            item.update(tool="claude", session_id=sid, cwd=claude.get("cwd", ""),
+            item.update(tool="claude", session_id=sid, cwd=claude.get("cwd", ""), pid=claude.get("pid"),
                         title=titles.get(sid) or claude.get("name") or "New Claude session",
                         status={"busy": "working", "idle": "idle"}.get(claude.get("status"), "idle"))
             if claude.get("startedAt"):
                 item["started"] = iso(claude["startedAt"] / 1000)
         elif codex:
             row = codex_thread_of(descendants(codex, kids))
-            item.update(tool="codex", cwd=proc_cwd(codex), title="New Codex session", status="idle")
+            item.update(tool="codex", cwd=proc_cwd(codex), title="New Codex session", status="idle", pid=codex)
             if row:
                 item.update(session_id=row["id"], title=codex_title(row), cwd=row["cwd"],
                             status="working" if codex_busy(row["id"]) else "idle")
@@ -305,7 +329,27 @@ def do_list(p):
     for s in recent:
         s["updated"] = iso(s["updated"])
     save_cache(cache, before)
-    return {"home": str(HOME), "running": run, "recent": recent}
+    for r in run:
+        r.pop("pid", None)
+    return {"agent": VERSION, "home": str(HOME), "running": run, "recent": recent,
+            "allowed": {t: [list(a) for a in sorted(extra_args(t))] for t in TOOLS}}
+
+
+def do_sessions(p):
+    """Every resumable session (for the resume picker), newest first; "open" ones are running somewhere now."""
+    n = p.get("limit", 100)
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise Fail("limit must be a number")
+    n = max(1, min(n, 300))
+    cache = load_cache()
+    before = json.loads(json.dumps(cache))
+    busy = live_ids(running(cache))
+    out = sorted(claude_recent(cache, n) + codex_recent(), key=lambda s: s["updated"], reverse=True)[:n]
+    for s in out:
+        s["updated"] = iso(s["updated"])
+        s["open"] = s["session_id"] in busy
+    save_cache(cache, before)
+    return {"agent": VERSION, "home": str(HOME), "sessions": out}
 
 
 def do_info(_):
@@ -318,7 +362,9 @@ def do_info(_):
 
 
 def _atomic_write(path, text):
-    """Replace path with text, keeping its permissions (~/.claude.json is usually 0600); new files get 0600."""
+    """Replace path with text, keeping its permissions (~/.claude.json is usually 0600); new files get 0600.
+    A symlinked file (dotfile managers) is written where the link points, so the link stays."""
+    path = Path(os.path.realpath(path))
     tmp = path.with_name(path.name + ".agent-sessions.tmp")
     mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
     tmp.unlink(missing_ok=True)
@@ -339,14 +385,26 @@ def trust_dir(tool, folder):
     else:
         p = CODEX_HOME / "config.toml"
         text = p.read_text() if p.exists() else ""
-        header = f"[projects.{json.dumps(folder)}]"
-        if header not in text:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write(p, text.rstrip("\n") + ("\n\n" if text else "") + f'{header}\ntrust_level = "trusted"\n')
+        if tomllib:
+            try:
+                if folder in tomllib.loads(text).get("projects", {}):
+                    return  # already listed (in whatever form the user wrote it)
+            except tomllib.TOMLDecodeError:
+                raise Fail(f"{p} is not valid TOML; not touching it") from None
+        header = f"[projects.{json.dumps(folder, ensure_ascii=False)}]"
+        if header in text:
+            return
+        new = text.rstrip("\n") + ("\n\n" if text else "") + f'{header}\ntrust_level = "trusted"\n'
+        if tomllib:
+            tomllib.loads(new)  # never write a config Codex can't read
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(p, new)
 
 
 def folder(path):
-    if not isinstance(path, str) or not path or "\0" in path or "\n" in path:
+    # no control characters or lone surrogates: the path ends up in TOML and JSON config files
+    if (not isinstance(path, str) or not path or any(ord(c) < 32 or ord(c) == 127 for c in path)
+            or any(0xD800 <= ord(c) <= 0xDFFF for c in path)):
         raise Fail("invalid folder")
     full = os.path.realpath(os.path.expanduser(path))
     home = os.path.realpath(HOME)
@@ -404,7 +462,7 @@ def clean_args(tool, args):
             out.append(a)
             if allowed[a]:
                 v = args[i + 1] if i + 1 < len(args) else None
-                if v is None or not allowed[a].match(v):
+                if v is None or not allowed[a].fullmatch(v):
                     raise Fail(f"invalid value for {a}")
                 out.append(v)
                 i += 1
@@ -412,6 +470,11 @@ def clean_args(tool, args):
         else:
             raise Fail(f"argument not allowed: {a[:60]} (the server owner can allow it in {EXTRA_ARGS})")
     return out
+
+
+def rc_last(argv):
+    """argv with --remote-control moved to the end (its optional value can't swallow what follows)."""
+    return [a for a in argv if a != LAST] + ([LAST] if LAST in argv else [])
 
 
 def tool_of(p):
@@ -434,9 +497,12 @@ def launch(tool, path, cwd, args, label, trust):
     while name in taken:
         name, i = f"{PREFIX}{tool}-{slug}-{i}", i + 1
     # bash -li gives the session the user's normal environment (PATH, nvm, pyenv). The screen ends when the tool exits.
-    # Drop HA's request from the session's environment, or running the agent inside a session would replay it.
-    env = {k: v for k, v in os.environ.items() if k != "SSH_ORIGINAL_COMMAND"}
-    subprocess.run(["screen", "-dmS", name, "bash", "-lic", shlex.join([path, *args])], cwd=cwd, check=True,
+    # Drop HA's request from the session's environment, or running the agent inside a session would replay it. Also
+    # drop a parent Claude Code's session markers (CLAUDECODE, CLAUDE_CODE_*): the new session would think it is a child
+    # session and stop saving its transcript, and it would inherit the parent's messaging token.
+    env = {k: v for k, v in os.environ.items() if k not in ("SSH_ORIGINAL_COMMAND", "CLAUDECODE", "CLAUDE_PID",
+                                                            "CLAUDE_EFFORT") and not k.startswith("CLAUDE_CODE_")}
+    subprocess.run(["screen", "-dmS", name, "bash", "-lic", shlex.join([path, *rc_last(args)])], cwd=cwd, check=True,
                    timeout=15, env=env)
     for _ in range(20):
         sid = next((f"{s}.{n}" for s, n in screens() if n == name), None)
@@ -459,23 +525,31 @@ def do_new(p):
 
 
 def resuming(sid):
-    """A resume of sid that is still starting: screen/bash/tool processes with it on their command line.
+    """A resume of sid that is still starting: this user's screen/bash/tool processes resuming it.
     Needed because a just-resumed Claude has not written its session file yet."""
+    me = os.getuid()
     for q in os.listdir("/proc"):
         if q.isdigit() and int(q) != os.getpid():
+            if proc_uid(q) != me:
+                continue  # other users can't block our resumes
             a = argv(int(q))
             if a and os.path.basename(a[0]) in ("screen", "SCREEN", "bash", "claude", "codex", "node"):
-                line = " ".join(a)
-                if sid in line and "resume" in line:
+                words = [w for x in a for w in x.split()]  # bash -lic '<one string>' holds the whole command
+                if sid in words and ("--resume" in words or "resume" in words):
                     return True
     return False
 
 
+def session_id(p):
+    sid = p.get("session_id")
+    if not isinstance(sid, str) or not SESSION_ID.fullmatch(sid):
+        raise Fail("invalid session id")
+    return sid
+
+
 def do_resume(p):
     tool, path = tool_of(p)
-    sid = p.get("session_id")
-    if not isinstance(sid, str) or not SESSION_ID.match(sid):
-        raise Fail("invalid session id")
+    sid = session_id(p)
     if sid in live_ids(running()) or resuming(sid):
         raise Fail("that session is already running")
     args = clean_args(tool, p.get("args", []))
@@ -487,24 +561,104 @@ def do_resume(p):
         argv_ = ["resume", *args, sid]
     if found is None:
         raise Fail("session not found")
-    cwd = folder(found["cwd"]) if os.path.isdir(found["cwd"] or "") else str(HOME)  # inside home, like new sessions
-    return launch(tool, path, cwd, argv_, p.get("name") or found["title"], bool(p.get("trust")))
+    trust = bool(p.get("trust"))
+    if p.get("cwd"):
+        cwd = folder(p["cwd"])  # picked in the card (a session copied from another server)
+    elif os.path.isdir(found["cwd"] or ""):
+        cwd = folder(found["cwd"])  # inside home, like new sessions
+    else:
+        cwd, trust = str(HOME), False  # its folder is gone: run in home, but never mark all of home trusted
+    name = p.get("name") or found["title"]
+    if not isinstance(name, str) or len(name) > 80:
+        raise Fail("invalid name")
+    return launch(tool, path, cwd, argv_, name, trust)
 
 
 def do_stop(p):
     sid = p.get("id")
-    if not isinstance(sid, str) or not SCREEN_ID.match(sid):
+    if not isinstance(sid, str) or not SCREEN_ID.fullmatch(sid):
         raise Fail("invalid session")
-    if sid not in {r["id"] for r in running()}:  # only screens the card lists, never the user's other screens
+    item = next((r for r in running() if r["id"] == sid), None)  # only what the card lists, never other screens
+    if item is None:
         raise Fail("no such session")
-    subprocess.run(["screen", "-S", sid, "-X", "quit"], timeout=10)
+    if item["name"].startswith(PREFIX):
+        subprocess.run(["screen", "-S", sid, "-X", "quit"], timeout=10)
+    elif item.get("pid"):
+        os.kill(int(item["pid"]), signal.SIGTERM)  # the user's own screen: stop the tool, keep their other windows
+    else:
+        raise Fail("no such session")
     return {"ok": True}
 
 
-VERBS = {"info": do_info, "list": do_list, "new": do_new, "resume": do_resume, "stop": do_stop, "trust": do_trust}
+# ---------- moving a Claude Code session between servers (HA reads it from one and writes it to the other) ----------
+
+def project_dir(cwd):
+    """~/.claude/projects/<cwd with every non-alphanumeric character as "-">, where Claude Code keeps transcripts."""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    if len(slug) > 200:
+        raise Fail("folder path is too long to copy a session into")
+    return HOME / ".claude" / "projects" / slug
 
 
-def main(command):
+def transcript(sid):
+    return next((p for p in (HOME / ".claude" / "projects").glob(f"*/{sid}.jsonl") if p.is_file()), None)
+
+
+def do_export(p):
+    if p.get("tool", "claude") != "claude":
+        raise Fail("only Claude Code sessions can move between servers")
+    sid = session_id(p)
+    if sid in live_ids(running()):
+        raise Fail("that session is running; stop it first, or resume it with --fork-session")
+    src = transcript(sid)
+    if src is None:
+        raise Fail("session not found")
+    if src.stat().st_size > MAX_TRANSFER:
+        raise Fail(f"session is larger than {MAX_TRANSFER // 1048576} MB")
+    title, cwd = claude_meta(src, {})
+    data = base64.b64encode(gzip.compress(src.read_bytes(), 6)).decode()
+    return {"session_id": sid, "title": title, "cwd": cwd, "home": str(HOME), "data": data}
+
+
+def _gunzip(raw):
+    d = zlib.decompressobj(wbits=31)
+    out = d.decompress(raw, MAX_TRANSFER + 1)
+    if len(out) > MAX_TRANSFER or d.unconsumed_tail:
+        raise Fail(f"session is larger than {MAX_TRANSFER // 1048576} MB")
+    return out
+
+
+def do_import(p, stdin=""):
+    if p.get("tool", "claude") != "claude":
+        raise Fail("only Claude Code sessions can move between servers")
+    sid = session_id(p)
+    cwd = folder(p.get("cwd") or "~")
+    if transcript(sid):
+        raise Fail("that session is already on this server")
+    try:
+        body = _gunzip(base64.b64decode(stdin.strip(), validate=True))
+        lines = [json.loads(ln) for ln in body.decode("utf-8").splitlines() if ln.strip()]
+    except (ValueError, zlib.error, EOFError, RecursionError):
+        raise Fail("the session data is damaged") from None
+    if not all(isinstance(x, dict) for x in lines) or not any(x.get("sessionId") == sid for x in lines):
+        raise Fail("that is not a transcript of this session")
+    dest = project_dir(cwd)
+    dest.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = dest / f"{sid}.jsonl"
+    tmp = dest / f".{sid}.agent-sessions.tmp"
+    tmp.unlink(missing_ok=True)
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+        f.write(body)
+    os.link(tmp, target)  # fails if it appeared meanwhile; never overwrites a transcript
+    tmp.unlink()
+    return {"ok": True, "cwd": cwd}
+
+
+VERBS = {"info": do_info, "list": do_list, "sessions": do_sessions, "new": do_new, "resume": do_resume,
+         "stop": do_stop, "trust": do_trust, "export": do_export, "import": do_import}
+
+
+def main(command, stdin=None):
     verb, _, raw = command.strip().partition(" ")
     if verb not in VERBS:
         return {"error": f"unknown command {verb!r}"}
@@ -512,11 +666,15 @@ def main(command):
         payload = json.loads(base64.b64decode(raw, validate=True)) if raw else {}
         if not isinstance(payload, dict):
             raise Fail("payload must be an object")
+        if verb == "import":
+            # base64 of at most MAX_TRANSFER gzipped (gzip can grow incompressible data a little)
+            data = (sys.stdin.read(MAX_TRANSFER * 4 // 3 + 65536) if stdin is None else stdin)
+            return do_import(payload, data)
         return VERBS[verb](payload)
     except Fail as e:
         return {"error": str(e)}
-    except (ValueError, TypeError) as e:
-        return {"error": f"bad request: {e}"}
+    except (ValueError, TypeError, RecursionError) as e:
+        return {"error": f"bad request: {str(e)[:200] or type(e).__name__}"}
     except subprocess.SubprocessError as e:
         return {"error": f"command failed: {e}"}
 

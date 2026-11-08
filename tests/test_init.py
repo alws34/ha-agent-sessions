@@ -2,23 +2,26 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import Context
-from homeassistant.exceptions import HomeAssistantError, Unauthorized
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.agent_sessions import flag_list
-from custom_components.agent_sessions.agent import AgentError
-from custom_components.agent_sessions.const import DOMAIN
+from custom_components.agent_sessions.agent import AgentError, new_key
+from custom_components.agent_sessions.const import AGENT_VERSION, DOMAIN
+
+KEY, PUB = new_key()
 
 DATA = {"name": "Workstation", "host": "192.0.2.20", "port": 22, "username": "dev", "ha_address": "192.0.2.2",
-        "private_key": "x", "host_key": "ssh-ed25519 AAAA", "tools": ["claude", "codex"]}
-LIST = {"home": "/home/dev",
+        "private_key": KEY, "host_key": "ssh-ed25519 AAAA", "tools": ["claude", "codex"]}
+LIST = {"agent": AGENT_VERSION, "home": "/home/dev", "allowed": {"claude": [["--chrome"]], "codex": []},
         "running": [{"id": "123.agent-claude-x", "name": "agent-claude-x", "tool": "claude", "title": "Fix tests",
                      "status": "working", "cwd": "/home/dev/code", "started": None, "session_id": "s1"}],
         "recent": [{"tool": "codex", "session_id": "s2", "title": "Old", "cwd": "/home/dev", "updated": None}]}
 
 
-async def setup(hass, call, options=None):
-    entry = MockConfigEntry(domain=DOMAIN, title="Workstation", data=DATA, options=options or {})
+async def setup(hass, call, options=None, data=None, title="Workstation"):
+    entry = MockConfigEntry(domain=DOMAIN, title=title, data=data or DATA, options=options or {})
     entry.add_to_hass(hass)
     with patch("custom_components.agent_sessions.Agent") as agent_cls:
         agent_cls.return_value.call = call
@@ -91,3 +94,59 @@ async def test_tool_installed_after_setup_is_picked_up(hass):
         entry = await setup(hass, call, {"default_tool": "claude"})
     assert entry.data["tools"] == ["claude", "codex"]
     assert set(sensor(hass).attributes["flags"]) == {"claude", "codex"}
+
+
+async def test_old_agent_gets_a_repair_with_the_install_command(hass):
+    call = AsyncMock(return_value={**LIST, "agent": "3"})
+    entry = await setup(hass, call)
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, f"agent_outdated_{entry.entry_id}")
+    cmd = issue.translation_placeholders["command"]
+    assert " 192.0.2.2 'ssh-ed25519 " in cmd and PUB.split()[1] in cmd
+    assert sensor(hass).attributes["agent_outdated"] is True
+    call.return_value = LIST
+    await entry.runtime_data.async_refresh()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, f"agent_outdated_{entry.entry_id}") is None
+
+
+async def test_position_and_allowed_attributes(hass):
+    await setup(hass, AsyncMock(return_value=LIST), {"position": 3})
+    a = sensor(hass).attributes
+    assert a["position"] == 3 and a["allowed"]["claude"] == [["--chrome"]] and a["agent_outdated"] is False
+    assert any(f["id"] == "fork_session" and f["resume_only"] for f in a["flags"]["claude"])
+
+
+async def test_move_a_session_between_servers(hass):
+    sid = "b63eba06-b9de-4360-b686-8744a2707765"
+    src_call = AsyncMock(side_effect=lambda verb, payload=None, stdin=None: {
+        "export": {"session_id": sid, "cwd": "/home/other/code/x", "home": "/home/other", "data": "DATA"},
+        "sessions": {"home": "/home/other", "sessions": [{"session_id": sid}]}}.get(verb, LIST))
+    dst_call = AsyncMock(return_value=LIST)
+    src = await setup(hass, src_call, data={**DATA, "host": "192.0.2.21"}, title="Other")
+    dst = await setup(hass, dst_call)
+    await hass.services.async_call(DOMAIN, "resume_session", {
+        "config_entry_id": dst.entry_id, "from_config_entry_id": src.entry_id, "tool": "claude", "session_id": sid,
+        "args": ["--fork-session"]}, blocking=True)
+    src_call.assert_any_call("export", {"tool": "claude", "session_id": sid})
+    dst_call.assert_any_call("import", {"tool": "claude", "session_id": sid, "cwd": "~/code/x"}, "DATA")
+    dst_call.assert_any_call("resume", {"tool": "claude", "session_id": sid, "args": ["--fork-session"],
+                                        "cwd": "~/code/x", "trust": False})
+
+    # already copied there before: resume the copy that's there
+    dst_call.side_effect = lambda verb, payload=None, stdin=None: (
+        (_ for _ in ()).throw(AgentError("that session is already on this server")) if verb == "import" else LIST)
+    await hass.services.async_call(DOMAIN, "resume_session", {
+        "config_entry_id": dst.entry_id, "from_config_entry_id": src.entry_id, "tool": "claude", "session_id": sid,
+        "folder": "~/elsewhere"}, blocking=True)
+    dst_call.assert_any_call("resume", {"tool": "claude", "session_id": sid, "args": [], "cwd": "~/elsewhere",
+                                        "trust": False})
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(DOMAIN, "resume_session", {
+            "config_entry_id": dst.entry_id, "from_config_entry_id": src.entry_id, "tool": "codex",
+            "session_id": sid}, blocking=True)
+
+    res = await hass.services.async_call(DOMAIN, "list_sessions", {}, blocking=True, return_response=True)
+    by = {s["server"]: s for s in res["servers"]}
+    assert by["Other"]["online"] and by["Other"]["sessions"] == [{"session_id": sid}]
+    assert by["Workstation"]["online"]  # LIST has no "sessions" key -> empty list
+    assert by["Workstation"]["sessions"] == []
