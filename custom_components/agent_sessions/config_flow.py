@@ -1,4 +1,5 @@
 """Config flow: server details -> authorize HA's key on the server -> confirm the server's identity. Options per server."""
+import ipaddress
 import re
 
 import voluptuous as vol
@@ -23,12 +24,14 @@ from .const import (
     OPT_DEFAULT_TOOL,
     OPT_FOLDERS,
     OPT_INTERVAL,
+    OPT_POSITION,
     OPT_RECENT,
     OPT_TRUST_ANY,
     OPT_TRUSTED,
     REPO,
     TOOL_NAMES,
     TOOLS,
+    install_command,
     opt_custom,
     opt_flags,
     opt_value,
@@ -44,10 +47,12 @@ def version(text):
     return m.group(0) if m else ""
 
 
-def install_command(ha_address, public_key):
-    ref = f"v{RELEASE}"
-    return (f"curl -fsSL https://raw.githubusercontent.com/{REPO}/{ref}/agent/install.sh"
-            f" | bash -s -- {ref} {ha_address} '{public_key}'")
+def valid_address(text):
+    """sshd's from= list: comma-separated addresses or networks. No wildcards: "*" would accept the key from anywhere."""
+    try:
+        return all(ipaddress.ip_network(part.strip(), strict=False) for part in text.split(",")) and bool(text.strip())
+    except ValueError:
+        return False
 
 
 class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
@@ -59,7 +64,11 @@ class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
         self._info = None
 
     async def async_step_user(self, user_input=None):
-        if user_input is not None:
+        errors = {}
+        if user_input is not None and not valid_address(user_input[CONF_HA_ADDRESS]):
+            errors[CONF_HA_ADDRESS] = "bad_address"
+        elif user_input is not None:
+            user_input[CONF_HA_ADDRESS] = user_input[CONF_HA_ADDRESS].replace(" ", "")
             await self.async_set_unique_id(f"{user_input[CONF_USERNAME]}@{user_input[CONF_HOST]}:{user_input[CONF_PORT]}")
             self._abort_if_unique_id_configured()
             self._data = dict(user_input)
@@ -69,13 +78,13 @@ class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
             me = await async_get_source_ip(self.hass)
         except OSError:  # no route to probe; the user can type it
             me = ""
-        return self.async_show_form(step_id="user", data_schema=vol.Schema({
+        return self.async_show_form(step_id="user", errors=errors, data_schema=vol.Schema({
             vol.Required(CONF_NAME): TEXT,
             vol.Required(CONF_HOST): TEXT,
             vol.Required(CONF_PORT, default=22): sel.NumberSelector(
                 sel.NumberSelectorConfig(min=1, max=65535, mode=sel.NumberSelectorMode.BOX)),
             vol.Required(CONF_USERNAME): TEXT,
-            vol.Required(CONF_HA_ADDRESS, default=me): TEXT,
+            vol.Required(CONF_HA_ADDRESS, default=(user_input or {}).get(CONF_HA_ADDRESS, me)): TEXT,
         }))
 
     async def async_step_authorize(self, user_input=None):
@@ -146,6 +155,8 @@ def options_schema(tools, o):
         vol.Required(OPT_INTERVAL, default=o.get(OPT_INTERVAL, 10)): sel.NumberSelector(
             sel.NumberSelectorConfig(min=5, max=3600, unit_of_measurement="s", mode=sel.NumberSelectorMode.BOX)),
         vol.Required(OPT_CONFIRM_STOP, default=o.get(OPT_CONFIRM_STOP, True)): sel.BooleanSelector(),
+        vol.Required(OPT_POSITION, default=o.get(OPT_POSITION, 1)): sel.NumberSelector(
+            sel.NumberSelectorConfig(min=1, max=99, mode=sel.NumberSelectorMode.BOX)),
     })
     return vol.Schema(fields)
 

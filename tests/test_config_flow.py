@@ -59,3 +59,13 @@ async def test_no_tools(hass):
         r = await hass.config_entries.flow.async_configure(r["flow_id"], USER)
         r = await hass.config_entries.flow.async_configure(r["flow_id"], {})
     assert r["errors"] == {"base": "no_tools"}
+
+
+async def test_bad_home_assistant_address(hass):
+    from custom_components.agent_sessions.config_flow import valid_address
+    assert valid_address("192.0.2.2") and valid_address("192.0.2.0/24, 2001:db8::1")
+    for bad in ("*", "192.0.2.2,*", "", "host.local", "1.2.3.4; rm -rf ~"):
+        assert not valid_address(bad)
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {**USER, "ha_address": "*"})
+    assert r["step_id"] == "user" and r["errors"] == {"ha_address": "bad_address"}
