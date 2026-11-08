@@ -263,7 +263,8 @@ def test_remote_control_goes_last(agent, tmp_path, monkeypatch):
     assert seen["cmd"][-1] == f"/bin/claude --resume {SID} --name x --remote-control"
 
 
-def test_values_must_match_whole(agent):
+def test_values_must_match_whole(agent, monkeypatch):
+    monkeypatch.setattr(agent, "which", lambda t: "/usr/bin/" + t)  # CI has no claude
     for tool, bad in [("claude", ["--model", "opus\n"]), ("claude", ["--effort", "high\n"]),
                       ("codex", ["-c", "model_reasoning_effort=high\n"])]:
         with pytest.raises(agent.Fail):
