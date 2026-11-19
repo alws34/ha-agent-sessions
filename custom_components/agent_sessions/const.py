@@ -75,8 +75,22 @@ def opt_custom(tool):
     return f"{tool}_custom_flags"
 
 
+# SHA-256 of agent/install.sh and agent/agent-sessions at this release's tag (tests check them against the files). The
+# install command refuses anything else, so a server only ever runs the agent this release of the integration expects,
+# even if the tag on GitHub were moved.
+INSTALLER_SHA256 = "397420a7ecfdc8a2455e971a0ab1bdc0bfc6bd65ba697648547f6bc210232999"
+AGENT_SHA256 = "4434529ee280817f48acdd539a5832af7fee70a99c19a9ce9562fa6b75dd29dc"
+
+# Downloads install.sh to a temporary file, checks it, then runs it (a cut-off download or a changed file never runs).
+# Plain POSIX sh with everything passed as arguments, so it pastes the same into bash, zsh or fish.
+_INSTALL_SH = ('f=$(mktemp) || exit 1; if curl -fsSL "$1" -o "$f" && echo "$2  $f" | sha256sum -c --status; '
+               'then bash "$f" "$3" "$4" "$5" "$6"; s=$?; '
+               'else echo "agent-sessions: download failed or install.sh does not match this release" >&2; s=1; fi; '
+               'rm -f "$f"; exit $s')
+
+
 def install_command(ha_address, public_key):
     """The one-line installer shown at setup and in the "agent outdated" repair. ha_address is validated at setup."""
     ref = f"v{VERSION}"
-    return (f"curl -fsSL https://raw.githubusercontent.com/{REPO}/{ref}/agent/install.sh"
-            f" | bash -s -- {ref} {shlex.quote(ha_address)} {shlex.quote(public_key)}")
+    url = f"https://raw.githubusercontent.com/{REPO}/{ref}/agent/install.sh"
+    return shlex.join(["sh", "-c", _INSTALL_SH, "sh", url, INSTALLER_SHA256, ref, ha_address, public_key, AGENT_SHA256])

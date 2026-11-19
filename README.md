@@ -33,11 +33,14 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
    your host, user and address, for example:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.2.0/agent/install.sh \
-     | bash -s -- v0.2.0 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions'
+   sh -c 'f=$(mktemp) || exit 1; if curl -fsSL "$1" -o "$f" && echo "$2  $f" | sha256sum -c --status; then bash …' sh \
+     https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.2.0/agent/install.sh <installer sha256> \
+     v0.2.0 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions' <agent sha256>
    ```
 
-   Run it on the server as that user. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to
+   Run it on the server as that user. It downloads the installer from the release tag, checks it against the SHA-256
+   this release of the integration expects (and the installer checks the agent the same way), so a moved tag or a
+   cut-off download never runs. It installs the agent to `~/.local/bin/agent-sessions` and adds one line to
    `~/.ssh/authorized_keys`:
 
    ```

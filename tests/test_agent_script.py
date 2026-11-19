@@ -320,3 +320,35 @@ def test_sessions_lists_open_ones_too(agent, tmp_path, monkeypatch):
 def test_deep_json_is_a_bad_request(agent):
     deep = base64.b64encode(("[" * 100000 + "]" * 100000).encode()).decode()
     assert "error" in agent.main("list " + deep)
+
+
+HOSTILE = ["it's $(touch PWNED) `touch PWNED` ${HOME} !! !-1 \\ \"q\" ; touch PWNED #", "-x", "a\nb", "ünï"]
+
+
+@pytest.mark.parametrize("name", HOSTILE)
+def test_session_command_reaches_the_tool_verbatim(agent, monkeypatch, tmp_path, name):
+    """The session runs as `screen ... bash -lic '<command>'`. Through a real interactive login bash, a session name
+    and an allowed-args value full of shell syntax reach the tool as plain arguments: nothing is run or expanded."""
+    out = tmp_path / "argv.json"
+    tool = tmp_path / "fake-claude"
+    tool.write_text(f"#!{sys.executable}\nimport json, sys\nopen({str(out)!r}, 'w').write(json.dumps(sys.argv[1:]))\n")
+    tool.chmod(0o755)
+    agent.EXTRA_ARGS.parent.mkdir(parents=True)
+    agent.EXTRA_ARGS.write_text("claude --add-dir '~/$(touch PWNED)'\n")
+    monkeypatch.setattr(agent, "which", lambda t: str(tool))
+    seen = []
+    real_run = agent.subprocess.run
+
+    def run(cmd, **kw):  # run the session's bash directly instead of in a detached screen
+        assert cmd[:3] == ["screen", "-dmS", cmd[2]] and cmd[3:5] == ["bash", "-lic"]
+        seen.append(cmd[2])
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+        real_run(["bash", "-lic", cmd[5]], cwd=kw["cwd"], env=env, check=True, timeout=30,
+                 stdin=agent.subprocess.DEVNULL, capture_output=True)
+    monkeypatch.setattr(agent.subprocess, "run", run)
+    monkeypatch.setattr(agent, "screens", lambda: [("1", seen[0])] if seen else [])
+    res = agent.main("new " + b64({"tool": "claude", "name": name, "args": ["--add-dir", "~/$(touch PWNED)"]}))
+    assert res["ok"], res
+    assert json.loads(out.read_text()) == ["--add-dir", f"{tmp_path}/$(touch PWNED)", "--name", name]
+    assert not list(tmp_path.rglob("PWNED")) and not Path("PWNED").exists()
+    assert seen[0].startswith("agent-claude-") and all(c.isalnum() or c in "-_" for c in seen[0])
