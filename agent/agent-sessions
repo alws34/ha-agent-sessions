@@ -23,7 +23,7 @@ try:
 except ImportError:
     tomllib = None
 
-VERSION = "4"  # the HA integration warns when a server runs an older agent (const.AGENT_VERSION)
+VERSION = "5"  # the HA integration warns when a server runs an older agent (const.AGENT_VERSION)
 HOME = Path.home()
 CACHE = HOME / ".cache" / "agent-sessions" / "titles.json"
 PREFIX = "agent-"  # screen names this agent creates

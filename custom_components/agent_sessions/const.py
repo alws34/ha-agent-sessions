@@ -2,8 +2,8 @@
 import shlex
 
 DOMAIN = "agent_sessions"
-VERSION = "0.2.0"  # must match manifest.json (tests check); also the git tag the installer is fetched from
-AGENT_VERSION = "4"  # agent/agent-sessions VERSION this release expects; older agents get a Repairs issue
+VERSION = "0.2.1"  # must match manifest.json (tests check); also the git tag the installer is fetched from
+AGENT_VERSION = "5"  # agent/agent-sessions VERSION this release expects; older agents get a Repairs issue
 REPO = "alws34/ha-agent-sessions"
 TOOLS = ("claude", "codex")
 TOOL_NAMES = {"claude": "Claude Code", "codex": "Codex CLI"}
@@ -79,7 +79,7 @@ def opt_custom(tool):
 # install command refuses anything else, so a server only ever runs the agent this release of the integration expects,
 # even if the tag on GitHub were moved.
 INSTALLER_SHA256 = "397420a7ecfdc8a2455e971a0ab1bdc0bfc6bd65ba697648547f6bc210232999"
-AGENT_SHA256 = "6e4e5735596d1955999d39f7f6208bdecd10c2c3a52642976a6ce9485d5dd572"
+AGENT_SHA256 = "745833675819186bfdd2e104751c7da4b92cee70c6d1164ad633616e91d715a8"
 
 # Downloads install.sh to a temporary file, checks it, then runs it (a cut-off download or a changed file never runs).
 # Plain POSIX sh with everything passed as arguments, so it pastes the same into bash, zsh or fish.

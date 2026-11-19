@@ -41,8 +41,8 @@ In Home Assistant: 2026.9 or newer, and [HACS](https://hacs.xyz).
 
    ```bash
    sh -c 'f=$(mktemp) || exit 1; if curl -fsSL "$1" -o "$f" && echo "$2  $f" | sha256sum -c --status; then bash …' sh \
-     https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.2.0/agent/install.sh <installer sha256> \
-     v0.2.0 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions' <agent sha256>
+     https://raw.githubusercontent.com/alws34/ha-agent-sessions/v0.2.1/agent/install.sh <installer sha256> \
+     v0.2.1 10.0.0.2 'ssh-ed25519 AAAAC3Nza… home-assistant-agent-sessions' <agent sha256>
    ```
 
    Run it on the server as that user. It downloads the installer from the release tag, checks it against the SHA-256
@@ -167,7 +167,7 @@ Found a problem? Report it privately; see [SECURITY.md](SECURITY.md).
 
 ## Update
 
-Update the integration in HACS and restart Home Assistant. When a release needs a newer agent on the servers (0.2.0
+Update the integration in HACS and restart Home Assistant. When a release needs a newer agent on the servers (0.2.1
 does), **Settings → Repairs** shows the install command for each server; run it there as before. It replaces the agent
 and keeps the same key. Until then the card says the agent is out of date, and the new features don't work on that
 server.

@@ -274,7 +274,7 @@ def test_form_value_is_what_the_card_starts_with():
         assert ids["model"] is False and ids["effort"] is True
 
 
-LISTING = {"agent": "4", "home": "/home/dev", "allowed": {"claude": [], "codex": []}, "running": [], "recent": []}
+LISTING = {"agent": "5", "home": "/home/dev", "allowed": {"claude": [], "codex": []}, "running": [], "recent": []}
 ENTRY = {"name": "Workstation", "host": "192.0.2.20", "port": 22, "username": "dev", "ha_address": "192.0.2.2",
          "private_key": "x", "host_key": "ssh-ed25519 AAAA", "tools": ["claude", "codex"]}
 
