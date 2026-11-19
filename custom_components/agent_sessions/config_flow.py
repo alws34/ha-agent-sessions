@@ -19,6 +19,7 @@ from .const import (
     DEFAULT_VALUES,
     DOMAIN,
     EFFORTS,
+    ENTRY_MINOR_VERSION,
     FLAGS,
     OPT_CONFIRM_STOP,
     OPT_DEFAULT_TOOL,
@@ -57,6 +58,7 @@ def valid_address(text):
 
 class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+    MINOR_VERSION = ENTRY_MINOR_VERSION
 
     def __init__(self):
         self._data = {}

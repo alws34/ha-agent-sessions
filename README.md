@@ -92,7 +92,7 @@ The older `entities:` list still works: exactly those servers, in that order.
 |---|---|
 | Default tool | Claude Code or Codex CLI, when the server has both |
 | Flags ticked by default | Per tool: which built-in flags start ticked in **New session** and are used for **Resume** |
-| Default model / effort | Per tool: values for the model and effort flags |
+| Default model / effort | Per tool: values for the model and effort flags, sent while that flag is ticked (effort is ticked by default; picking a value in **New session** ticks it) |
 | Custom flags | Per tool, one per line (e.g. `--chrome`). Start a line with `*` to tick it by default. The server must allow each one too (see [Security](#security)) |
 | Favorite folders | Offered in **New session** |
 | Trusted folders | One per line, subfolders included. The tools won't ask "Do you trust this folder?" there. Written on the server when you save |
@@ -104,8 +104,8 @@ The older `entities:` list still works: exactly those servers, in that order.
 
 Built-in flags: Claude Code `--dangerously-skip-permissions`, `--remote-control`, `--continue`, `--fork-session`
 (with resume), `--model`, `--effort`, `--verbose`; Codex CLI `--dangerously-bypass-approvals-and-sandbox`, `--search`,
-`-m`, reasoning effort (`-c model_reasoning_effort=none…xhigh`), `--no-alt-screen`. Checked against Claude Code 2.1.319
-and Codex CLI 0.167. `--remote-control` always goes last on the command line, because it takes an optional name.
+`-m`, reasoning effort (`-c model_reasoning_effort=none…xhigh`), `--no-alt-screen`. Checked against Claude Code 2.1.328
+and Codex CLI 0.170 (source). `--remote-control` always goes last on the command line, because it takes an optional name.
 
 ## Entities and services
 

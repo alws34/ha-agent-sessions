@@ -29,7 +29,11 @@ FLAGS = {
         {"id": "no_alt_screen", "args": ["--no-alt-screen"]},
     ],
 }
-DEFAULT_FLAGS = {"claude": ["skip_permissions", "remote_control"], "codex": ["no_alt_screen"]}
+# Effort is ticked by default: the options form always has a "default effort", and without the flag the tool silently
+# uses its own default (Claude Code: medium for Opus), not the one picked in the options. 0.2.0 entries get it ticked
+# by the config entry migration (MINOR_VERSION 2).
+DEFAULT_FLAGS = {"claude": ["skip_permissions", "remote_control", "effort"], "codex": ["no_alt_screen", "effort"]}
+ENTRY_MINOR_VERSION = 2
 DEFAULT_VALUES = {"claude": {"model": "opus", "effort": "high"}, "codex": {"model": "", "effort": "medium"}}
 EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"], "codex": ["none", "minimal", "low", "medium", "high", "xhigh"]}
 

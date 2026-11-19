@@ -205,6 +205,21 @@ async def async_setup(hass: HomeAssistant, config):
     return True
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """1.1 -> 1.2: tick the effort flag. Before, "default effort" was saved but the flag wasn't ticked by default, so
+    sessions silently ran at the tool's own default (Claude Code on Opus: medium) instead of the effort picked here."""
+    if entry.version > 1:
+        return False  # from a newer release
+    if entry.minor_version < 2:
+        options = dict(entry.options)
+        for tool in TOOLS:
+            key = opt_flags(tool)
+            if key in options and "effort" not in options[key]:
+                options[key] = [*options[key], "effort"]
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: AgentEntry) -> bool:
     d = entry.data
     agent = Agent(d[CONF_HOST], d[CONF_PORT], d[CONF_USERNAME], d[CONF_PRIVATE_KEY], d[CONF_HOST_KEY])

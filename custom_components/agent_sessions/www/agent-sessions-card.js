@@ -426,8 +426,9 @@ function openDialog(card, a, opts = {}) {
     f.value = e.target.value;
     if (box && !fits(f)) return;
     if (box) {
+      // picking a value (e.g. effort "high") means "use it": tick the flag, or the value is shown but never sent
       box.disabled = !usable(f);
-      if (!usable(f)) { box.checked = false; f.on = false; }
+      box.checked = f.on = usable(f);
     }
     root.querySelector(".prev").textContent = command();
   });

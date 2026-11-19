@@ -59,6 +59,8 @@
         "data_description": {
           "claude_custom_flags": "One per line. Start a line with * to tick it by default.",
           "codex_custom_flags": "One per line. Start a line with * to tick it by default.",
+          "claude_effort": "Sent as --effort while --effort is ticked above (it is by default). Unticked, Claude Code uses its own default (medium on Opus).",
+          "codex_effort": "Sent as -c model_reasoning_effort=... while reasoning effort is ticked above (it is by default).",
           "folders": "One per line. Offered when you start a new session.",
           "trusted_folders": "One per line, subfolders included. The tools won't ask whether you trust these folders. Applied on the server when you save.",
           "scan_interval": "Runs a quick check over SSH on the server. It does not contact Claude or OpenAI.",
