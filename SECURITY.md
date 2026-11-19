@@ -1,10 +1,28 @@
 # Security
 
+## Supported versions
+
+Only the **latest release** receives security fixes. Update the integration in HACS; when a release needs a newer
+agent, **Settings → Repairs** shows the command that updates each server.
+
 ## Reporting a vulnerability
 
-Please report privately: **Security → Report a vulnerability** on
-[github.com/alws34/ha-agent-sessions](https://github.com/alws34/ha-agent-sessions/security). Don't open a public issue.
-Only the latest release is supported.
+Please **do not open a public issue**. Report privately: **Security → Report a vulnerability** on
+[github.com/alws34/ha-agent-sessions](https://github.com/alws34/ha-agent-sessions/security/advisories/new).
+Include the version, what an attacker needs (Home Assistant admin? a LAN position? a file on the server?), and steps
+or a proof of concept.
+
+- Acknowledgement within 7 days, an assessment within 14.
+- Accepted reports get a fix in a new release as soon as practical, normally within 90 days. The advisory is
+  published with the fix (or at 90 days), with credit if you want it.
+
+This is a one-maintainer project, so timelines are best effort.
+
+**In scope:** the integration (`custom_components/agent_sessions`), the card, the server agent
+(`agent/agent-sessions`), the installer (`agent/install.sh`) and the command Home Assistant shows to run it, and the
+release workflows. **Out of scope:** Claude Code, Codex CLI, Home Assistant, HACS and OpenSSH themselves (report to
+those projects), and what a session does once someone types into it. See [docs/threat-model.md](docs/threat-model.md)
+for the assumptions.
 
 ## What Home Assistant can do on your server
 
@@ -20,6 +38,7 @@ Home Assistant gets an SSH key per server. That key can only do what the card do
 | Agent: folders | New sessions, resumed sessions and trusted folders must be inside the user's home (symlinks resolved). |
 | Agent: stop | Only sessions the card lists. The agent's own `agent-*` screens are closed; in one of your own screens only the Claude Code / Codex process is stopped, so its other windows stay. |
 | Agent: moving sessions | `export` reads only `~/.claude/projects/*/<uuid>.jsonl` of a session that isn't running. `import` writes only a new `~/.claude/projects/<folder>/<uuid>.jsonl` (mode 600, never overwriting) for a folder inside home, after checking it is gzip + JSON lines of that session, at most 64 MB unpacked. |
+| Installer | The command Home Assistant shows downloads `install.sh` from the release tag and runs it only if its SHA-256 matches the one this release of the integration carries; `install.sh` installs the agent only if its SHA-256 matches too. A moved tag or a cut-off download never runs. |
 | Integration | The services are admin-only, so other Home Assistant users get *Unauthorized* (and the card hides the buttons). The server's host key is pinned at setup; a changed key is refused. The card only shows this integration's own sensors. |
 
 Home Assistant cannot send a prompt. A session only does work when someone types into it, either over SSH as that
@@ -37,8 +56,14 @@ user (`screen -r`) or through the Claude app (`--remote-control`, i.e. whoever h
   home, or use a dedicated user.
 - **Bypass flags.** `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` let the session
   run any command as that user without asking. Combined with `--remote-control`, your Claude account controls them.
-- **Non-admin Home Assistant users can read session titles and folders** in the sensor's attributes (they can't start
-  or stop anything). A title can be the start of your first prompt, so don't paste secrets as a session's first message.
+- **Non-admin Home Assistant users can read** the sensor's attributes: session titles and folders, the server's host,
+  user and home folder, and the server's `allowed-args` lines (they can't start or stop anything). A title can be the
+  start of your first prompt, so don't paste secrets as a session's first message. The agent's own title cache
+  (`~/.cache/agent-sessions/titles.json`) is private to the user (0600).
+- **The first connection is trust on first use.** During setup Home Assistant connects before you have confirmed the
+  fingerprint (it shows it to you on the next step). Public-key authentication can't be replayed to the real server,
+  but compare the fingerprint before you press Submit. If a server's host key changes legitimately (reinstall),
+  delete the entry and add the server again.
 - **Moving a session copies its transcript** (your prompts, the tool output, anything secret in it) through Home
   Assistant to the other server. Both servers then hold a copy.
 - **No rate limit.** The key can start many sessions (CPU, memory, model usage).

@@ -1,5 +1,12 @@
 # Agent Sessions for Home Assistant
 
+[![Validate](https://img.shields.io/github/actions/workflow/status/alws34/ha-agent-sessions/validate.yml?branch=main&style=flat-square&label=tests)](https://github.com/alws34/ha-agent-sessions/actions/workflows/validate.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/alws34/ha-agent-sessions/codeql.yml?branch=main&style=flat-square&label=CodeQL)](https://github.com/alws34/ha-agent-sessions/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/alws34/ha-agent-sessions/badge)](https://scorecard.dev/viewer/?uri=github.com/alws34/ha-agent-sessions)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5?style=flat-square)](https://hacs.xyz/docs/faq/custom_repositories)
+[![Release](https://img.shields.io/github/v/release/alws34/ha-agent-sessions?style=flat-square)](https://github.com/alws34/ha-agent-sessions/releases)
+[![License: MIT](https://img.shields.io/github/license/alws34/ha-agent-sessions?style=flat-square)](LICENSE)
+
 Start, stop and resume **Claude Code** and **Codex CLI** sessions on your servers from Home Assistant.
 
 - One integration entry per server; add as many servers as you like.
@@ -180,9 +187,12 @@ Delete the entry in Home Assistant, then on the server remove the `home-assistan
 ## Development
 
 ```bash
-uv venv .venv && uv pip install -p .venv -r requirements_test.txt
+uv venv .venv --python 3.14 && uv pip install -p .venv -r requirements_test.txt
 .venv/bin/pytest -q && .venv/bin/ruff check custom_components tests
 ```
+
+The card's logic is tested by running the real card under Node (bundled by the test requirements). See
+[CONTRIBUTING.md](CONTRIBUTING.md), including what to update when the agent or the installer changes.
 
 `AGENT_SESSIONS_URL=file:///path/to/agent/agent-sessions bash agent/install.sh …` installs a local agent copy.
 
