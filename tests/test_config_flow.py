@@ -64,8 +64,30 @@ async def test_no_tools(hass):
 async def test_bad_home_assistant_address(hass):
     from custom_components.agent_sessions.config_flow import valid_address
     assert valid_address("192.0.2.2") and valid_address("192.0.2.0/24, 2001:db8::1")
-    for bad in ("*", "192.0.2.2,*", "", "host.local", "1.2.3.4; rm -rf ~"):
+    for bad in ("*", "192.0.2.2,*", "", "host.local", "1.2.3.4; rm -rf ~", "0.0.0.0/0", "192.0.2.2, ::/0"):
         assert not valid_address(bad)
     r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {**USER, "ha_address": "*"})
     assert r["step_id"] == "user" and r["errors"] == {"ha_address": "bad_address"}
+
+
+async def test_odd_info_reply_is_no_tools_not_a_crash(hass):
+    with patch("custom_components.agent_sessions.config_flow.Agent",
+               return_value=fake_agent(AsyncMock(return_value={"agent": "4", "tools": {"claude": None}}))):
+        r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        r = await hass.config_entries.flow.async_configure(r["flow_id"], USER)
+        r = await hass.config_entries.flow.async_configure(r["flow_id"], {})
+    assert r["errors"] == {"base": "no_tools"}
+
+
+async def test_close_waits_for_the_connection():
+    from custom_components.agent_sessions.agent import Agent
+    from custom_components.agent_sessions.agent import new_key as make_key
+    agent = Agent("192.0.2.20", 22, "dev", make_key()[0])
+    conn = MagicMock()
+    conn.wait_closed = AsyncMock()
+    agent._conn = conn
+    await agent.close()
+    await agent.close()  # twice is fine
+    conn.close.assert_called_once()
+    conn.wait_closed.assert_awaited_once()

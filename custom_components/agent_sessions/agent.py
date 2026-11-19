@@ -87,6 +87,10 @@ class Agent:
         return data
 
     async def close(self):
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            conn.close()
+            try:
+                await asyncio.wait_for(conn.wait_closed(), 5)
+            except (TimeoutError, OSError, asyncssh.Error):
+                pass  # it is closed on our side either way

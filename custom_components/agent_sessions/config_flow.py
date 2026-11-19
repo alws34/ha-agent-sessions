@@ -50,11 +50,13 @@ def version(text):
 
 
 def valid_address(text):
-    """sshd's from= list: comma-separated addresses or networks. No wildcards: "*" would accept the key from anywhere."""
+    """sshd's from= list: comma-separated addresses or networks. Nothing that matches every address ("*", 0.0.0.0/0,
+    ::/0): that would accept the key from anywhere."""
     try:
-        return all(ipaddress.ip_network(part.strip(), strict=False) for part in text.split(",")) and bool(text.strip())
+        nets = [ipaddress.ip_network(part.strip(), strict=False) for part in text.split(",")]
     except ValueError:
         return False
+    return bool(text.strip()) and all(n.prefixlen > 0 for n in nets)
 
 
 class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
@@ -106,7 +108,9 @@ class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
             finally:
                 await agent.close()
             if not errors:
-                if not any(t["path"] for t in self._info["tools"].values()):
+                tools = self._info.get("tools") if isinstance(self._info.get("tools"), dict) else {}
+                self._info["tools"] = {t: tools.get(t) if isinstance(tools.get(t), dict) else {} for t in TOOLS}
+                if not any(t.get("path") for t in self._info["tools"].values()):
                     errors["base"] = "no_tools"
                 else:
                     return await self.async_step_confirm()
@@ -117,14 +121,14 @@ class AgentSessionsFlow(ConfigFlow, domain=DOMAIN):
             "script_url": f"https://github.com/{REPO}/blob/v{RELEASE}/agent/install.sh"})
 
     async def async_step_confirm(self, user_input=None):
-        tools = [t for t in TOOLS if self._info["tools"][t]["path"]]
+        tools = [t for t in TOOLS if self._info["tools"][t].get("path")]
         if user_input is not None:
             self._data.pop("fingerprint", None)
             self._data[CONF_TOOLS] = tools
             self._data[CONF_PORT] = int(self._data[CONF_PORT])
             return self.async_create_entry(title=self._data[CONF_NAME], data=self._data,
                                            options={OPT_DEFAULT_TOOL: tools[0]})
-        found = ", ".join(f"{TOOL_NAMES[t]} {version(self._info['tools'][t]['version'])}".strip() for t in tools)
+        found = ", ".join(f"{TOOL_NAMES[t]} {version(self._info['tools'][t].get('version'))}".strip() for t in tools)
         return self.async_show_form(step_id="confirm", description_placeholders={
             "fingerprint": self._data["fingerprint"], "tools": found, "screen": self._info.get("screen") or "?"})
 

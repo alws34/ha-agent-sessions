@@ -28,7 +28,7 @@
       "not_authorized": "The server refused Home Assistant's key. Run the command above on the server as that user, then press Submit again.",
       "cannot_connect": "Could not connect to the server. Check the host and port.",
       "no_tools": "Connected, but neither claude nor codex was found for that user. Install one and press Submit again.",
-      "bad_address": "Enter an IP address or network (for example 192.168.0.185 or 192.168.0.0/24), several separated by commas."
+      "bad_address": "Enter an IP address or network (for example 192.168.0.185 or 192.168.0.0/24), several separated by commas. A network that matches every address (0.0.0.0/0) is not allowed."
     },
     "abort": {
       "already_configured": "This server and user are already added."
