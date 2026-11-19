@@ -2,12 +2,20 @@ version: 2
 # Version updates: monthly, one grouped PR per ecosystem. Security fixes open as soon as an
 # alert does, grouped per ecosystem.
 updates:
-  # requirements_test.txt (pinned test/lint tooling). The integration's runtime requirement
-  # (asyncssh in manifest.json) is a lower bound that Home Assistant resolves.
+  # requirements_test.txt: exact test pins. Dependabot only bumps the test tooling:
+  # pytest-homeassistant-custom-component (it fixes the Home Assistant version under test) and ruff.
+  # home-assistant-frontend must equal what that Home Assistant release pins (the frontend manifest),
+  # and asyncssh must stay at what that release ships and at or above manifest.json's lower bound, so
+  # they are updated by hand in the same commit as the harness bump (see CONTRIBUTING.md).
+  # nodejs-wheel-binaries only runs the card's tests; it is bumped by hand too.
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: home-assistant-frontend
+      - dependency-name: asyncssh
+      - dependency-name: nodejs-wheel-binaries
     groups:
       python:
         patterns: ["*"]

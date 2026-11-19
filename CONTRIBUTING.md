@@ -21,6 +21,16 @@ uv venv .venv --python 3.14 && uv pip install -p .venv -r requirements_test.txt
 .venv/bin/pytest -q --cov=custom_components
 ```
 
+Test requirements are pinned exactly in `requirements_test.txt`. `pytest-homeassistant-custom-component` fixes the
+Home Assistant version under test, so when it is bumped, set in the same commit:
+
+- `home-assistant-frontend` to what that Home Assistant release pins (`homeassistant/components/frontend/manifest.json`
+  at that tag of home-assistant/core);
+- `asyncssh` to the version that release ships (`requirements_all.txt`), never below `manifest.json`'s lower bound.
+
+Dependabot only proposes `pytest-homeassistant-custom-component` and `ruff`; `nodejs-wheel-binaries` (Node for the
+card's tests) is bumped by hand as well.
+
 The card's tests run the real `agent-sessions-card.js` under Node (`tests/card_harness.js`); the
 Node binary comes from the `nodejs-wheel-binaries` test requirement, so no system Node is needed.
 Tests never contact a real server, Claude or OpenAI (one optional test reads `claude --help` when
