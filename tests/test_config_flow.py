@@ -91,3 +91,17 @@ async def test_close_waits_for_the_connection():
     await agent.close()  # twice is fine
     conn.close.assert_called_once()
     conn.wait_closed.assert_awaited_once()
+
+
+def test_translations_have_no_html():
+    """hassfest refuses strings that look like HTML ("<value>" included)."""
+    import re
+
+    def strings(x):
+        if isinstance(x, dict):
+            for v in x.values():
+                yield from strings(v)
+        elif isinstance(x, str):
+            yield x
+    text = json.loads(Path("custom_components/agent_sessions/translations/en.json").read_text())
+    assert [s for s in strings(text) if re.search(r"<[A-Za-z/!]", s)] == []

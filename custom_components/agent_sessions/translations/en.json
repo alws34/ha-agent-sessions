@@ -59,16 +59,16 @@
         "data_description": {
           "claude_custom_flags": "One per line. Start a line with * to tick it by default (then Resume uses it too). The server must allow each one.",
           "codex_custom_flags": "One per line. Start a line with * to tick it by default (then Resume uses it too). The server must allow each one.",
-          "claude_effort": "Always sent as --effort <value> to every new and resumed session.",
-          "codex_effort": "Always sent as -c model_reasoning_effort=<value> to every new and resumed session.",
+          "claude_effort": "Always sent as --effort followed by this value, to every new and resumed session.",
+          "codex_effort": "Always sent as -c model_reasoning_effort=VALUE, to every new and resumed session.",
           "folders": "One per line. Offered when you start a new session.",
           "trusted_folders": "One per line, subfolders included. The tools won't ask whether you trust these folders. Applied on the server when you save.",
           "scan_interval": "Runs a quick check over SSH on the server. It does not contact Claude or OpenAI.",
           "position": "Order of the servers in the Agent Sessions card: lower numbers come first, same numbers by name. A card can set its own order in its editor.",
           "claude_flags": "New session starts with these ticked, and Resume uses them. Model and effort below are added whenever they have a value.",
           "codex_flags": "New session starts with these ticked, and Resume uses them. Model and reasoning effort below are added whenever they have a value.",
-          "claude_model": "Sent as --model <value> to every new and resumed session. Leave empty to not send it (Claude Code then uses its own default).",
-          "codex_model": "Sent as -m <value> to every new and resumed session. Leave empty to not send it (Codex then uses its own default)."
+          "claude_model": "Sent as --model followed by this value, to every new and resumed session. Leave empty to not send it (Claude Code then uses its own default).",
+          "codex_model": "Sent as -m followed by this value, to every new and resumed session. Leave empty to not send it (Codex then uses its own default)."
         }
       }
     },
