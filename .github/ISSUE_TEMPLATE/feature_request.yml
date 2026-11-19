@@ -1,0 +1,18 @@
+name: Feature request
+description: An idea for the integration, the agent or the card.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to do?
+      description: The problem first, then the solution you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Does it widen what Home Assistant's key can do on a server?
+      description: >-
+        For example a new flag, verb or folder rule. The agent's allowlist is deliberately small
+        (see SECURITY.md); say why the new capability is safe.

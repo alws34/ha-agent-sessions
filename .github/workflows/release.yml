@@ -1,0 +1,73 @@
+# Tag push (vX.Y.Z) -> GitHub Release with the integration zip, the server agent and installer,
+# SHA256SUMS, and SLSA build provenance for each file. HACS installs from the tag itself; the
+# assets let anyone check that the agent a server runs is the one this release ships.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Check, package and attest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Sigstore signing of the provenance
+      attestations: write # store the provenance attestation on GitHub
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag matches the manifest, the code and the pinned checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          manifest=$(jq -r .version custom_components/agent_sessions/manifest.json)
+          test "$TAG" = "v$manifest" || { echo "tag $TAG but manifest.json says $manifest"; exit 1; }
+          grep -q "^VERSION = \"$manifest\"" custom_components/agent_sessions/const.py
+          grep -q "^INSTALLER_SHA256 = \"$(sha256sum agent/install.sh | cut -d' ' -f1)\"" custom_components/agent_sessions/const.py
+          grep -q "^AGENT_SHA256 = \"$(sha256sum agent/agent-sessions | cut -d' ' -f1)\"" custom_components/agent_sessions/const.py
+      - name: Package
+        run: |
+          mkdir dist
+          (cd custom_components/agent_sessions && zip -qrX ../../dist/agent_sessions.zip . -x '__pycache__/*')
+          cp agent/agent-sessions agent/install.sh dist/
+          (cd dist && sha256sum agent_sessions.zip agent-sessions install.sh > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/agent_sessions.zip
+            dist/agent-sessions
+            dist/install.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: dist
+      - name: Create the release, or add the assets to one made by hand
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes dist/*
+          fi
