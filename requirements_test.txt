@@ -1,5 +1,5 @@
-pytest-homeassistant-custom-component==0.13.367
+pytest-homeassistant-custom-component==0.13.375
 asyncssh==2.24.1
-ruff==0.16.10
-home-assistant-frontend==20260826.7
+ruff==0.17.5
+home-assistant-frontend==20260930.5
 nodejs-wheel-binaries==24.19.0
