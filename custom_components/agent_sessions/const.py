@@ -79,7 +79,7 @@ def opt_custom(tool):
 # install command refuses anything else, so a server only ever runs the agent this release of the integration expects,
 # even if the tag on GitHub were moved.
 INSTALLER_SHA256 = "397420a7ecfdc8a2455e971a0ab1bdc0bfc6bd65ba697648547f6bc210232999"
-AGENT_SHA256 = "4434529ee280817f48acdd539a5832af7fee70a99c19a9ce9562fa6b75dd29dc"
+AGENT_SHA256 = "6e4e5735596d1955999d39f7f6208bdecd10c2c3a52642976a6ce9485d5dd572"
 
 # Downloads install.sh to a temporary file, checks it, then runs it (a cut-off download or a changed file never runs).
 # Plain POSIX sh with everything passed as arguments, so it pastes the same into bash, zsh or fish.

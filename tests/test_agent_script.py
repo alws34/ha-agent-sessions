@@ -352,3 +352,16 @@ def test_session_command_reaches_the_tool_verbatim(agent, monkeypatch, tmp_path,
     assert json.loads(out.read_text()) == ["--add-dir", f"{tmp_path}/$(touch PWNED)", "--name", name]
     assert not list(tmp_path.rglob("PWNED")) and not Path("PWNED").exists()
     assert seen[0].startswith("agent-claude-") and all(c.isalnum() or c in "-_" for c in seen[0])
+
+
+def test_title_cache_is_private(agent, tmp_path):
+    os.umask(0o022)  # what sshd usually gives the forced command
+    try:
+        agent.CACHE.parent.mkdir(parents=True)
+        agent.CACHE.write_text("{}")
+        agent.CACHE.chmod(0o644)  # left by an older agent
+        agent.save_cache({"x": [1, 2, "first prompt", "/code"]}, {})
+    finally:
+        os.umask(0o022)
+    assert agent.CACHE.stat().st_mode & 0o777 == 0o600 and agent.CACHE.parent.stat().st_mode & 0o777 == 0o700
+    assert json.loads(agent.CACHE.read_text()) == {"x": [1, 2, "first prompt", "/code"]}

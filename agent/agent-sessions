@@ -306,10 +306,14 @@ def load_cache():
 
 
 def save_cache(cache, before):
+    """Titles are the start of your first prompts: keep the cache private (0600 in a 0700 folder), whatever the umask."""
     if cache != before:
-        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        CACHE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(CACHE.parent, 0o700)
         tmp = CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cache))
+        tmp.unlink(missing_ok=True)
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            f.write(json.dumps(cache))
         os.replace(tmp, CACHE)
 
 
