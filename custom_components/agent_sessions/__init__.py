@@ -39,6 +39,7 @@ from .const import (
     opt_custom,
     opt_flags,
     opt_value,
+    value_flags,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,16 +92,27 @@ def lines(text):
     return [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
 
 
+def option_value(tool, key, options):
+    """The model/effort value the options form shows for tool (its default until the form is saved)."""
+    value = str(options.get(opt_value(tool, key), DEFAULT_VALUES[tool][key]) or "").strip()
+    if key == "effort" and value not in EFFORTS[tool]:
+        return DEFAULT_VALUES[tool][key]  # what the form's select falls back to
+    return value
+
+
 def flag_list(tool, options):
-    """The New-session checklist for one tool: built-in flags, then the user's custom flags."""
-    defaults = options.get(opt_flags(tool), DEFAULT_FLAGS[tool])
+    """The New-session checklist for one tool: built-in flags, then the user's custom flags. "default" is what the
+    options form shows: on/off flags ticked there, value flags (model, effort) whenever the form has a value for them,
+    custom flags starting with "*". The card sends exactly the flags it shows ticked, with the values it shows."""
+    ticked = set(options.get(opt_flags(tool), DEFAULT_FLAGS[tool])) - set(value_flags(tool))
     out = []
     for f in FLAGS[tool]:
-        item = {"id": f["id"], "args": f["args"], "default": f["id"] in defaults, "resume": f.get("resume", True)}
+        item = {"id": f["id"], "args": f["args"], "default": f["id"] in ticked, "resume": f.get("resume", True)}
         if f.get("resume_only"):
             item["resume_only"] = True
         if "value" in f:
-            item["value"] = options.get(opt_value(tool, f["value"]), DEFAULT_VALUES[tool][f["value"]])
+            item["value"] = option_value(tool, f["value"], options)
+            item["default"] = item["value"] != ""
             item["fmt"] = f.get("fmt", "{}")
             if f["value"] == "effort":
                 item["choices"] = EFFORTS[tool]
@@ -109,7 +121,7 @@ def flag_list(tool, options):
         try:
             args = shlex.split(line.lstrip("*"))
         except ValueError:
-            continue  # unbalanced quotes; ponytail: silently skipped, the options form could validate instead
+            continue  # unbalanced quotes: the options form refuses these, so only hand-edited entries get here
         if args:
             out.append({"id": f"custom{i}", "args": args, "default": line.startswith("*"), "resume": True,
                         "custom": True})
@@ -206,17 +218,19 @@ async def async_setup(hass: HomeAssistant, config):
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """1.1 -> 1.2: tick the effort flag. Before, "default effort" was saved but the flag wasn't ticked by default, so
-    sessions silently ran at the tool's own default (Claude Code on Opus: medium) instead of the effort picked here."""
+    """1.1/1.2 -> 1.3: sessions start the way the options form shows. Model and effort used to be sent only while also
+    ticked in "flags ticked by default", so a value shown in the form (say model "opus") could silently not be sent.
+    Now a value flag is on whenever the form has a value for it, and the form no longer lists them as checkboxes; the
+    migration drops them from the saved lists. Running it again changes nothing."""
     if entry.version > 1:
         return False  # from a newer release
-    if entry.minor_version < 2:
+    if entry.minor_version < 3:
         options = dict(entry.options)
         for tool in TOOLS:
             key = opt_flags(tool)
-            if key in options and "effort" not in options[key]:
-                options[key] = [*options[key], "effort"]
-        hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
+            if key in options:
+                options[key] = [f for f in options[key] if f not in value_flags(tool)]
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=3)
     return True
 
 

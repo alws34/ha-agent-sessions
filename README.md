@@ -71,11 +71,13 @@ The older `entities:` list still works: exactly those servers, in that order.
 - A **green dot** next to a server's name means Home Assistant reached it on the last check; **red** means it couldn't
   (the reason is shown on its slide).
 - **■ Stop** asks first (can be turned off per server), then closes the session's screen.
-- **▶ Resume** starts the session again in a new screen, in the folder it ran in, with that server's default flags.
+- **▶ Resume** starts the session again in a new screen, in the folder it ran in, with exactly the flags the resume
+  dialog would start with: that server's defaults from its options.
   Sessions that are already open (in a screen, a terminal or the desktop app) are not offered, and the agent refuses
   to resume them twice.
 - **+ New session** opens the checklist: tool (if the server has both), folder (favorites or any path), optional
-  name, and the flags. The bottom of the dialog shows the exact command. A flag that needs a value (Codex `-m` has no
+  name, and the flags. The bottom of the dialog shows the exact command the server runs; the session gets what the
+  dialog shows ticked, with the values it shows, and nothing else. A flag that needs a value (Codex `-m` has no
   default) can only be ticked once it has one; a custom flag the server doesn't allow is marked *not allowed on
   server*.
 - Tick **--resume** (or **All sessions ›** above Recent) to pick a session from **any** server. A session from this
@@ -91,9 +93,10 @@ The older `entities:` list still works: exactly those servers, in that order.
 | Option | What it does |
 |---|---|
 | Default tool | Claude Code or Codex CLI, when the server has both |
-| Flags ticked by default | Per tool: which built-in flags start ticked in **New session** and are used for **Resume** |
-| Default model / effort | Per tool: values for the model and effort flags, sent while that flag is ticked (effort is ticked by default; picking a value in **New session** ticks it) |
-| Custom flags | Per tool, one per line (e.g. `--chrome`). Start a line with `*` to tick it by default. The server must allow each one too (see [Security](#security)) |
+| Flags ticked by default | Per tool: which on/off flags start ticked in **New session** and are used for **Resume** |
+| Model | Per tool: sent as `--model <value>` (Codex `-m <value>`) to every new and resumed session. Empty: not sent, the tool picks its own default |
+| Effort | Per tool: always sent as `--effort <value>` (Codex `-c model_reasoning_effort=<value>`) |
+| Custom flags | Per tool, one per line (e.g. `--chrome`). Start a line with `*` to tick it by default (then **Resume** uses it too). The server must allow each one too (see [Security](#security)) |
 | Favorite folders | Offered in **New session** |
 | Trusted folders | One per line, subfolders included. The tools won't ask "Do you trust this folder?" there. Written on the server when you save |
 | Also trust any other folder I start a session in | Marks each new session's folder as trusted |

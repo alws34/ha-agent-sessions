@@ -41,12 +41,12 @@
         "data": {
           "default_tool": "Default tool for new sessions",
           "claude_flags": "Claude Code: flags ticked by default",
-          "claude_model": "Claude Code: default --model",
-          "claude_effort": "Claude Code: default --effort",
+          "claude_model": "Claude Code: model (--model)",
+          "claude_effort": "Claude Code: effort (--effort)",
           "claude_custom_flags": "Claude Code: custom flags",
           "codex_flags": "Codex CLI: flags ticked by default",
-          "codex_model": "Codex CLI: default model (-m)",
-          "codex_effort": "Codex CLI: default reasoning effort",
+          "codex_model": "Codex CLI: model (-m)",
+          "codex_effort": "Codex CLI: reasoning effort (-c model_reasoning_effort=)",
           "codex_custom_flags": "Codex CLI: custom flags",
           "folders": "Favorite folders",
           "trusted_folders": "Trusted folders",
@@ -57,16 +57,23 @@
           "position": "Position in the card"
         },
         "data_description": {
-          "claude_custom_flags": "One per line. Start a line with * to tick it by default.",
-          "codex_custom_flags": "One per line. Start a line with * to tick it by default.",
-          "claude_effort": "Sent as --effort while --effort is ticked above (it is by default). Unticked, Claude Code uses its own default (medium on Opus).",
-          "codex_effort": "Sent as -c model_reasoning_effort=... while reasoning effort is ticked above (it is by default).",
+          "claude_custom_flags": "One per line. Start a line with * to tick it by default (then Resume uses it too). The server must allow each one.",
+          "codex_custom_flags": "One per line. Start a line with * to tick it by default (then Resume uses it too). The server must allow each one.",
+          "claude_effort": "Always sent as --effort <value> to every new and resumed session.",
+          "codex_effort": "Always sent as -c model_reasoning_effort=<value> to every new and resumed session.",
           "folders": "One per line. Offered when you start a new session.",
           "trusted_folders": "One per line, subfolders included. The tools won't ask whether you trust these folders. Applied on the server when you save.",
           "scan_interval": "Runs a quick check over SSH on the server. It does not contact Claude or OpenAI.",
-          "position": "Order of the servers in the Agent Sessions card: lower numbers come first, same numbers by name. A card can set its own order in its editor."
+          "position": "Order of the servers in the Agent Sessions card: lower numbers come first, same numbers by name. A card can set its own order in its editor.",
+          "claude_flags": "New session starts with these ticked, and Resume uses them. Model and effort below are added whenever they have a value.",
+          "codex_flags": "New session starts with these ticked, and Resume uses them. Model and reasoning effort below are added whenever they have a value.",
+          "claude_model": "Sent as --model <value> to every new and resumed session. Leave empty to not send it (Claude Code then uses its own default).",
+          "codex_model": "Sent as -m <value> to every new and resumed session. Leave empty to not send it (Codex then uses its own default)."
         }
       }
+    },
+    "error": {
+      "bad_custom_flags": "A custom flag line has unbalanced quotes."
     }
   },
   "selector": {
@@ -81,8 +88,6 @@
         "skip_permissions": "--dangerously-skip-permissions",
         "remote_control": "--remote-control",
         "continue": "--continue",
-        "model": "--model",
-        "effort": "--effort",
         "verbose": "--verbose",
         "fork_session": "--fork-session (with resume)"
       }
@@ -91,8 +96,6 @@
       "options": {
         "bypass": "--dangerously-bypass-approvals-and-sandbox",
         "search": "--search",
-        "model": "-m (model)",
-        "effort": "reasoning effort",
         "no_alt_screen": "--no-alt-screen"
       }
     }

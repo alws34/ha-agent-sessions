@@ -1,9 +1,11 @@
-"""Every built-in flag end to end: HA's catalog -> the argv the card sends -> the agent's allowlist -> the command the
-session's screen runs. Locks the exact argv for new and resumed sessions, and that the configured effort is sent."""
+"""Every built-in flag end to end: the options form -> HA's catalog -> what the real card (run under Node) shows and
+sends -> the agent's allowlist -> the command the session's screen runs. The rule: a session starts exactly the way the
+options form and the card show it, nothing hidden added and nothing shown dropped."""
 import base64
 import importlib.machinery
 import importlib.util
 import json
+import os
 import re
 import shlex
 import shutil
@@ -48,14 +50,37 @@ OPTIONS = {"codex_model": CODEX_MODEL}
 
 
 def card_args(f):
-    """flagArgs in the card (asserted below to still read the same)."""
-    return [*f["args"], *([f["fmt"].replace("{}", f["value"] or "")] if f.get("fmt") else [])]
+    """What one flag adds to the command line (flagArgs in the card)."""
+    return [*f["args"], *([f["fmt"].replace("{}", f["value"].strip())] if f.get("fmt") else [])]
 
 
-def card_default_args(flags, resume=False):
-    """The argv the card sends with the flags ticked by default: New session, or the quick Resume button."""
-    return [a for f in flags if f["default"] and (f["resume"] if resume else not f.get("resume_only"))
-            and (not f.get("fmt") or (f["value"] or "").strip()) for a in card_args(f)]
+def node():
+    try:
+        import nodejs_wheel  # requirements_test.txt: a Node binary in the venv, so this runs without a system Node
+        exe = Path(nodejs_wheel.__file__).parent / "bin" / "node"
+        if exe.exists():
+            return str(exe)
+    except ImportError:
+        pass
+    return shutil.which("node")
+
+
+RUN = subprocess.run  # the agent fixture replaces subprocess.run (the agent's screen launch)
+
+
+def card(*cases):
+    """Ask the real card what it shows and sends (tests/card_harness.js)."""
+    if not node():
+        pytest.skip("node not available")
+    out = RUN([node(), str(ROOT / "tests" / "card_harness.js"), str(CARD)], input=json.dumps(cases),
+                         capture_output=True, text=True, timeout=60, check=True).stdout
+    return json.loads(out)
+
+
+def attrs(tool, options, allowed=None):
+    """The sensor attributes the card reads for one tool."""
+    return {"config_entry_id": "e1", "tools": [tool], "flags": {tool: flag_list(tool, options)},
+            "allowed": {tool: allowed or []} if allowed is not False else None}
 
 
 @pytest.fixture
@@ -91,13 +116,6 @@ def launched(agent, verb, payload):
 
 def test_every_builtin_flag_is_covered():
     assert {t: [f["id"] for f in FLAGS[t]] for t in FLAGS} == {t: list(EXPECTED[t]) for t in EXPECTED}
-
-
-def test_card_flag_args_unchanged():
-    js = CARD.read_text()
-    assert 'const flagArgs = (f) => [...f.args, ...(f.fmt ? [f.fmt.replace("{}", f.value ?? "")] : [])];' in js
-    # choosing a value in New session ticks its flag, or the value would be shown but never sent
-    assert "box.checked = f.on = usable(f);" in js
 
 
 @pytest.mark.parametrize(("tool", "flag"), CASES)
@@ -152,45 +170,191 @@ def test_agent_allowlist_matches_catalog(agent):
     assert all(DEFAULT_VALUES[t]["effort"] in EFFORTS[t] for t in EFFORTS)
 
 
-async def test_configured_high_effort_is_sent(hass, agent):
-    """The reported bug: options say effort "high", but the session started at Claude Code's default (medium),
-    because --effort was not a default-ticked flag and nothing was sent. A 0.2.0 entry (minor version 1) is migrated
-    to tick it, and New session / quick Resume then send --effort high."""
-    options = {"claude_flags": ["skip_permissions", "remote_control"], "claude_effort": "high",
-               "claude_model": "opus", "claude_custom_flags": ""}
-    entry = MockConfigEntry(domain=DOMAIN, title="Workstation", version=1, minor_version=1, options=options, data={
-        "name": "Workstation", "host": "192.0.2.20", "port": 22, "username": "dev", "ha_address": "192.0.2.2",
-        "private_key": "x", "host_key": "ssh-ed25519 AAAA", "tools": ["claude"]})
+# ---------- the UI is the source of truth: options form and card state -> the exact argv ----------
+
+SKIP, RC = "--dangerously-skip-permissions", "--remote-control"
+BYPASS = "--dangerously-bypass-approvals-and-sandbox"
+CUSTOM = {"claude_flags": [], "claude_custom_flags": "*--chrome\n--other\n*--refused"}
+# (case id, tool, options form, server's allowed-args (False: agent too old to say), card state, expected args)
+UI = [
+    ("claude-fresh-new", "claude", {}, None, {"mode": "new"}, [SKIP, RC, "--model", "opus", "--effort", "high"]),
+    ("claude-fresh-resume", "claude", {}, None, {"mode": "resume", "picked": SID},
+     [SKIP, RC, "--model", "opus", "--effort", "high"]),
+    ("claude-fresh-quick", "claude", {}, None, {"mode": "quick"}, [SKIP, RC, "--model", "opus", "--effort", "high"]),
+    ("claude-no-model-new", "claude", {"claude_model": "", "claude_effort": "max",
+                                       "claude_flags": ["continue", "verbose", "fork_session"]}, None,
+     {"mode": "new"}, ["--continue", "--effort", "max", "--verbose"]),  # --fork-session needs a session to resume
+    ("claude-fork-resume", "claude", {"claude_model": "", "claude_effort": "max",
+                                      "claude_flags": ["continue", "verbose", "fork_session"]}, None,
+     {"mode": "resume", "picked": SID}, ["--fork-session", "--effort", "max", "--verbose"]),  # no --continue
+    ("claude-fork-quick", "claude", {"claude_model": "", "claude_effort": "max",
+                                     "claude_flags": ["continue", "verbose", "fork_session"]}, None,
+     {"mode": "quick"}, ["--fork-session", "--effort", "max", "--verbose"]),
+    ("claude-continue-new", "claude", {"claude_flags": ["continue"], "claude_model": "sonnet"}, None,
+     {"mode": "new"}, ["--continue", "--model", "sonnet", "--effort", "high"]),
+    ("claude-edited-new", "claude", {}, None,
+     {"mode": "new", "edits": [{"id": "model", "on": False}, {"id": "effort", "value": "low"}]},
+     [SKIP, RC, "--effort", "low"]),
+    ("claude-named-new", "claude", {}, None, {"mode": "new", "name": "bug fix"},
+     [SKIP, RC, "--model", "opus", "--effort", "high"]),
+    ("claude-custom-new", "claude", CUSTOM, [["--chrome"], ["--other"]], {"mode": "new"},
+     ["--model", "opus", "--effort", "high", "--chrome"]),  # --refused: shown "not allowed on server", not sent
+    ("claude-custom-quick", "claude", CUSTOM, [["--chrome"], ["--other"]], {"mode": "quick"},
+     ["--model", "opus", "--effort", "high", "--chrome"]),
+    ("claude-custom-old-agent", "claude", CUSTOM, False, {"mode": "new"},
+     ["--model", "opus", "--effort", "high", "--chrome", "--refused"]),
+    ("codex-fresh-new", "codex", {}, None, {"mode": "new"}, ["-c", "model_reasoning_effort=medium", "--no-alt-screen"]),
+    ("codex-fresh-resume", "codex", {}, None, {"mode": "resume", "picked": SID},
+     ["-c", "model_reasoning_effort=medium", "--no-alt-screen"]),
+    ("codex-fresh-quick", "codex", {}, None, {"mode": "quick"}, ["-c", "model_reasoning_effort=medium", "--no-alt-screen"]),
+    ("codex-set-new", "codex", {"codex_model": "gpt-5.5", "codex_effort": "xhigh", "codex_flags": ["bypass", "search"]},
+     None, {"mode": "new"}, [BYPASS, "--search", "-m", "gpt-5.5", "-c", "model_reasoning_effort=xhigh"]),
+    ("codex-set-quick", "codex", {"codex_model": "gpt-5.5", "codex_effort": "xhigh", "codex_flags": ["bypass", "search"]},
+     None, {"mode": "quick"}, [BYPASS, "--search", "-m", "gpt-5.5", "-c", "model_reasoning_effort=xhigh"]),
+    ("codex-typed-model-new", "codex", {}, None, {"mode": "new", "edits": [{"id": "model", "value": "o3"}]},
+     ["-m", "o3", "-c", "model_reasoning_effort=medium", "--no-alt-screen"]),
+    ("codex-custom-new", "codex", {"codex_custom_flags": "*--add-dir ~/shared\n--oss"}, [["--add-dir", "~/shared"]],
+     {"mode": "new"}, ["-c", "model_reasoning_effort=medium", "--no-alt-screen", "--add-dir", "~/shared"]),
+]
+
+
+def agent_argv(agent, tool, mode, args, name=""):
+    """The session's argv as the agent launches it, for what the card sent."""
+    if mode == "new":
+        payload = {"tool": tool, "args": args, **({"name": name} if name else {})}
+        return shlex.split(launched(agent, "new", payload))
+    return shlex.split(launched(agent, "resume", {"tool": tool, "session_id": SID, "args": args}))
+
+
+@pytest.mark.parametrize(("tool", "options", "allowed", "state", "want"), [c[1:] for c in UI], ids=[c[0] for c in UI])
+def test_session_starts_as_the_ui_shows(agent, tool, options, allowed, state, want):
+    a = attrs(tool, options, allowed)
+    (res,) = card({**state, "tool": tool, "attrs": a, "session_id": SID})
+    assert res["args"] == want
+    if state["mode"] == "quick":
+        # the Resume button sends what the resume dialog starts with for that session
+        (dlg,) = card({"mode": "resume", "picked": SID, "tool": tool, "attrs": a})
+        assert res["service"] == "resume_session" and res["args"] == dlg["args"]
+        res = dlg
+    if not state.get("edits"):  # the checklist shows ticked exactly what is sent
+        flags = {f["id"]: f for f in a["flags"][tool]}
+        assert [x for i in res["checked"] for x in card_args(flags[i])] == want
+    # what the dialog shows as the command is what the server runs (the server owner allows the custom flags; an
+    # allowed "~/shared" reaches the tool as the home folder's path)
+    custom = [f["args"] for f in a["flags"][tool] if f.get("custom")]
+    if custom:
+        agent.EXTRA_ARGS.parent.mkdir(parents=True, exist_ok=True)
+        agent.EXTRA_ARGS.write_text("".join(f"{tool} {shlex.join(c)}\n" for c in allowed or custom))
+    got = agent_argv(agent, tool, "new" if state["mode"] == "new" else "resume", res["args"], state.get("name", ""))
+    assert got == [f"/usr/bin/{tool}", *[os.path.expanduser(w) for w in res["command"][1:]]]
+
+
+def test_ui_table_covers_every_builtin_flag():
+    sent = {(c[1], a) for c in UI for a in c[5]}
+    for tool in FLAGS:
+        for f in FLAGS[tool]:
+            assert (tool, f["args"][0]) in sent, f
+
+
+def test_named_claude_session_shows_its_name_flag():
+    (res,) = card({"mode": "new", "tool": "claude", "attrs": attrs("claude", {}), "name": "bug fix"})
+    assert res["command"] == ["claude", SKIP, "--model", "opus", "--effort", "high", "--name", "bug fix", RC]
+
+
+def test_form_value_is_what_the_card_starts_with():
+    for tool in FLAGS:
+        for options, model in (({}, DEFAULT_VALUES[tool]["model"]), ({f"{tool}_model": " x1 "}, "x1"),
+                               ({f"{tool}_model": ""}, "")):
+            f = next(x for x in flag_list(tool, options) if x["id"] == "model")
+            assert f["value"] == model and f["default"] == bool(model)
+        effort = next(x for x in flag_list(tool, {f"{tool}_effort": "bogus"}) if x["id"] == "effort")
+        assert effort["value"] == DEFAULT_VALUES[tool]["effort"] and effort["default"]  # what the select shows
+        # stale ticks for value flags in a saved list don't matter: the value decides
+        ids = {x["id"]: x["default"] for x in flag_list(tool, {f"{tool}_flags": ["model"], f"{tool}_model": ""})}
+        assert ids["model"] is False and ids["effort"] is True
+
+
+LISTING = {"agent": "4", "home": "/home/dev", "allowed": {"claude": [], "codex": []}, "running": [], "recent": []}
+ENTRY = {"name": "Workstation", "host": "192.0.2.20", "port": 22, "username": "dev", "ha_address": "192.0.2.2",
+         "private_key": "x", "host_key": "ssh-ed25519 AAAA", "tools": ["claude", "codex"]}
+
+
+def patched_agent():
+    p = patch("custom_components.agent_sessions.Agent")
+    agent_cls = p.start()
+    agent_cls.return_value.call = AsyncMock(return_value=LISTING)
+    agent_cls.return_value.close = AsyncMock()
+    return p
+
+
+async def load(hass, entry):
     entry.add_to_hass(hass)
-    listing = {"agent": "4", "home": "/home/dev", "allowed": {"claude": []}, "running": [], "recent": []}
-    with patch("custom_components.agent_sessions.Agent") as agent_cls, \
-            patch("custom_components.agent_sessions.ir.async_create_issue"):
-        agent_cls.return_value.call = AsyncMock(return_value=listing)
-        agent_cls.return_value.close = AsyncMock()
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    assert entry.minor_version == 2
-    assert entry.options["claude_flags"] == ["skip_permissions", "remote_control", "effort"]
-    flags = hass.states.get("sensor.workstation_sessions").attributes["flags"]["claude"]
-
-    new = card_default_args(flags)
-    assert new == ["--dangerously-skip-permissions", "--remote-control", "--effort", "high"]
-    assert launched(agent, "new", {"tool": "claude", "args": new}) == \
-        "/usr/bin/claude --dangerously-skip-permissions --effort high --remote-control"
-    resume = card_default_args(flags, resume=True)
-    assert launched(agent, "resume", {"tool": "claude", "session_id": SID, "args": resume}) == \
-        f"/usr/bin/claude --dangerously-skip-permissions --effort high --resume {SID} --remote-control"
+    p = patched_agent()
+    try:
+        with patch("custom_components.agent_sessions.ir.async_create_issue"):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+    finally:
+        p.stop()
+    return hass.states.get("sensor.workstation_sessions").attributes
 
 
-async def test_migration_keeps_later_choices(hass):
-    """Only 1.1 entries are migrated; unticking effort afterwards sticks."""
-    entry = MockConfigEntry(domain=DOMAIN, version=1, minor_version=2, options={"claude_flags": ["verbose"]})
-    entry.add_to_hass(hass)
+@pytest.mark.parametrize("minor", [1, 2])
+async def test_older_entries_start_as_their_form_shows(hass, agent, minor):
+    """0.2.0 (1.1) and 5ee3ea5 (1.2) entries: model "opus" was shown in the form but never sent, and effort only while
+    ticked. After the migration both are sent because the form shows them, and the saved lists hold on/off flags only."""
+    flags = ["skip_permissions", "remote_control"] + (["effort"] if minor == 2 else [])
+    entry = MockConfigEntry(domain=DOMAIN, title="Workstation", version=1, minor_version=minor, data=ENTRY, options={
+        "claude_flags": flags, "claude_effort": "high", "claude_model": "opus", "claude_custom_flags": "",
+        "codex_flags": ["no_alt_screen", "model"], "codex_model": "", "codex_effort": "low"})
+    a = await load(hass, entry)
+    assert entry.minor_version == 3
+    assert entry.options["claude_flags"] == ["skip_permissions", "remote_control"]
+    assert entry.options["codex_flags"] == ["no_alt_screen"]
+    new, quick = card({"mode": "new", "tool": "claude", "attrs": a}, {"mode": "quick", "tool": "claude", "attrs": a,
+                                                                      "session_id": SID})
+    assert new["args"] == quick["args"] == [SKIP, RC, "--model", "opus", "--effort", "high"]
+    assert agent_argv(agent, "claude", "new", new["args"]) == \
+        ["/usr/bin/claude", SKIP, "--model", "opus", "--effort", "high", RC]
+    (codex,) = card({"mode": "new", "tool": "codex", "attrs": a})
+    assert codex["args"] == ["-c", "model_reasoning_effort=low", "--no-alt-screen"]
+
     from custom_components.agent_sessions import async_migrate_entry
-    assert await async_migrate_entry(hass, entry)
-    assert entry.options["claude_flags"] == ["verbose"]
-    assert next(f for f in flag_list("claude", {}) if f["id"] == "effort")["default"]  # new entries: ticked
-    assert next(f for f in flag_list("codex", {}) if f["id"] == "effort")["default"]
+    before = dict(entry.options)
+    assert await async_migrate_entry(hass, entry)  # idempotent
+    assert entry.options == before and entry.minor_version == 3
+
+
+async def test_options_form_saves_what_it_shows(hass, agent):
+    entry = MockConfigEntry(domain=DOMAIN, title="Workstation", version=1, minor_version=3, data=ENTRY, options={})
+    await load(hass, entry)
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = {str(k): (k, v) for k, v in r["data_schema"].schema.items()}
+    for tool in FLAGS:  # model and effort are fields of their own, not checkboxes that could hide them
+        _, sel = schema[f"{tool}_flags"]
+        assert [o["value"] if isinstance(o, dict) else o for o in sel.config["options"]] == \
+            [f["id"] for f in FLAGS[tool] if "value" not in f]
+    assert schema["claude_model"][0].description == {"suggested_value": "opus"}
+
+    form = {"claude_flags": ["verbose"], "claude_effort": "low", "claude_custom_flags": "*--bad 'quote",
+            "codex_flags": [], "codex_model": "gpt-5.5", "codex_effort": "high", "codex_custom_flags": "",
+            "folders": "~", "trusted_folders": "", "trust_any": False, "recent": 10, "scan_interval": 10,
+            "confirm_stop": True, "position": 1, "default_tool": "claude"}
+    r = await hass.config_entries.options.async_configure(r["flow_id"], form)
+    assert r["errors"] == {"claude_custom_flags": "bad_custom_flags"}
+    p = patched_agent()
+    try:
+        # claude_model cleared: the form leaves it out; it is saved as empty, so --model is not sent
+        r = await hass.config_entries.options.async_configure(r["flow_id"], {**form, "claude_custom_flags": "*--x"})
+        await hass.async_block_till_done()
+    finally:
+        p.stop()
+    assert entry.options["claude_model"] == "" and entry.options["codex_model"] == "gpt-5.5"
+    a = hass.states.get("sensor.workstation_sessions").attributes
+    claude, codex = card({"mode": "new", "tool": "claude", "attrs": a}, {"mode": "new", "tool": "codex", "attrs": a})
+    assert claude["args"] == ["--effort", "low", "--verbose"]  # --x: the server's allowed-args doesn't list it
+    assert codex["args"] == ["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
+
 
 
 @pytest.mark.skipif(not shutil.which("claude"), reason="claude not installed")

@@ -1,6 +1,7 @@
 """Config flow: server details -> authorize HA's key on the server -> confirm the server's identity. Options per server."""
 import ipaddress
 import re
+import shlex
 
 import voluptuous as vol
 from homeassistant.components.network import async_get_source_ip
@@ -9,6 +10,7 @@ from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector as sel
 
+from . import lines, option_value
 from .agent import Agent, AgentError, AuthFailed, new_key
 from .const import (
     CONF_HA_ADDRESS,
@@ -16,11 +18,9 @@ from .const import (
     CONF_PRIVATE_KEY,
     CONF_TOOLS,
     DEFAULT_FLAGS,
-    DEFAULT_VALUES,
     DOMAIN,
     EFFORTS,
     ENTRY_MINOR_VERSION,
-    FLAGS,
     OPT_CONFIRM_STOP,
     OPT_DEFAULT_TOOL,
     OPT_FOLDERS,
@@ -36,6 +36,7 @@ from .const import (
     opt_custom,
     opt_flags,
     opt_value,
+    toggle_flags,
 )
 from .const import VERSION as RELEASE
 
@@ -140,12 +141,16 @@ def options_schema(tools, o):
         fields[vol.Required(OPT_DEFAULT_TOOL, default=o.get(OPT_DEFAULT_TOOL, tools[0]))] = sel.SelectSelector(
             sel.SelectSelectorConfig(options=list(tools), translation_key="tool"))
     for t in tools:
-        fields[vol.Required(opt_flags(t), default=o.get(opt_flags(t), DEFAULT_FLAGS[t]))] = sel.SelectSelector(
-            sel.SelectSelectorConfig(options=[f["id"] for f in FLAGS[t]], multiple=True,
+        # Only the on/off flags are checkboxes. Model and effort are sent whenever they have a value here (see
+        # const.DEFAULT_FLAGS), so the form never shows a value that isn't used.
+        ticked = [f for f in o.get(opt_flags(t), DEFAULT_FLAGS[t]) if f in toggle_flags(t)]
+        fields[vol.Required(opt_flags(t), default=ticked)] = sel.SelectSelector(
+            sel.SelectSelectorConfig(options=toggle_flags(t), multiple=True,
                                      translation_key=f"{t}_flags", mode=sel.SelectSelectorMode.LIST))
-        fields[vol.Optional(opt_value(t, "model"), default=o.get(opt_value(t, "model"), DEFAULT_VALUES[t]["model"]))
+        # suggested_value, not default: with a default, clearing the field would bring the default back
+        fields[vol.Optional(opt_value(t, "model"), description={"suggested_value": option_value(t, "model", o)})
                ] = TEXT
-        fields[vol.Required(opt_value(t, "effort"), default=o.get(opt_value(t, "effort"), DEFAULT_VALUES[t]["effort"]))
+        fields[vol.Required(opt_value(t, "effort"), default=option_value(t, "effort", o))
                ] = sel.SelectSelector(sel.SelectSelectorConfig(options=EFFORTS[t]))
         fields[vol.Optional(opt_custom(t), default=o.get(opt_custom(t), ""))] = MULTILINE
     fields.update({
@@ -163,9 +168,28 @@ def options_schema(tools, o):
     return vol.Schema(fields)
 
 
+def bad_custom_flags(text):
+    """True if a custom-flags line can't be split like a shell would (unbalanced quotes)."""
+    for line in lines(text):
+        try:
+            shlex.split(line.lstrip("*"))
+        except ValueError:
+            return True
+    return False
+
+
 class AgentSessionsOptions(OptionsFlow):
     async def async_step_init(self, user_input=None):
+        tools = self.config_entry.data[CONF_TOOLS]
+        errors = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        return self.async_show_form(step_id="init", data_schema=options_schema(
-            self.config_entry.data[CONF_TOOLS], self.config_entry.options))
+            for t in tools:
+                # a cleared model field is left out of user_input; store it as empty (not sent), not as "use default"
+                user_input.setdefault(opt_value(t, "model"), "")
+                user_input[opt_value(t, "model")] = user_input[opt_value(t, "model")].strip()
+                if bad_custom_flags(user_input.get(opt_custom(t))):
+                    errors[opt_custom(t)] = "bad_custom_flags"
+            if not errors:
+                return self.async_create_entry(data=user_input)
+        return self.async_show_form(step_id="init", errors=errors, data_schema=options_schema(
+            tools, user_input if user_input is not None else self.config_entry.options))

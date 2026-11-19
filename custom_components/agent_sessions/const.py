@@ -29,11 +29,12 @@ FLAGS = {
         {"id": "no_alt_screen", "args": ["--no-alt-screen"]},
     ],
 }
-# Effort is ticked by default: the options form always has a "default effort", and without the flag the tool silently
-# uses its own default (Claude Code: medium for Opus), not the one picked in the options. 0.2.0 entries get it ticked
-# by the config entry migration (MINOR_VERSION 2).
-DEFAULT_FLAGS = {"claude": ["skip_permissions", "remote_control", "effort"], "codex": ["no_alt_screen", "effort"]}
-ENTRY_MINOR_VERSION = 2
+# What the options form shows is what sessions get. On/off flags are ticked by default when listed here (the form's
+# "flags ticked by default"). Flags with a value (model, effort) are not in that list: they are ticked whenever their
+# value field in the form is filled in, so a value shown in the form is always sent (an empty model is not sent).
+# ENTRY_MINOR_VERSION 3 migrates older entries to this (see async_migrate_entry).
+DEFAULT_FLAGS = {"claude": ["skip_permissions", "remote_control"], "codex": ["no_alt_screen"]}
+ENTRY_MINOR_VERSION = 3
 DEFAULT_VALUES = {"claude": {"model": "opus", "effort": "high"}, "codex": {"model": "", "effort": "medium"}}
 EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"], "codex": ["none", "minimal", "low", "medium", "high", "xhigh"]}
 
@@ -58,6 +59,16 @@ def opt_flags(tool):
 
 def opt_value(tool, key):
     return f"{tool}_{key}"
+
+
+def value_flags(tool):
+    """Ids of the flags that take a value (model, effort): on by default exactly when their option has a value."""
+    return [f["id"] for f in FLAGS[tool] if "value" in f]
+
+
+def toggle_flags(tool):
+    """Ids of the on/off flags: the choices of the options form's "flags ticked by default"."""
+    return [f["id"] for f in FLAGS[tool] if "value" not in f]
 
 
 def opt_custom(tool):

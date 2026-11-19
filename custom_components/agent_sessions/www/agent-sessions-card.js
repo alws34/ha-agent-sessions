@@ -13,9 +13,40 @@ const ago = (iso) => {
   return d ? `${d}d ago` : h ? `${h}h ago` : m ? `${m}m ago` : "just now";
 };
 const short = (path, home) => (home && path?.startsWith(home) ? "~" + path.slice(home.length) : path || "~");
-const flagArgs = (f) => [...f.args, ...(f.fmt ? [f.fmt.replace("{}", f.value ?? "")] : [])];
+const flagArgs = (f) => [...f.args, ...(f.fmt ? [f.fmt.replace("{}", String(f.value ?? "").trim())] : [])];
 // a flag that takes a value can't be used without one (Codex's model has no default, and "-m ''" is refused)
 const usable = (f) => !f.fmt || String(f.value ?? "").trim() !== "";
+
+// What the card shows is what it sends. These are used both to draw the checklist and to build the arguments, for
+// New session, the dialog's resume, and the quick Resume button (which uses the checklist's starting state).
+// The starting state: the defaults from the server's options (value flags are on when they have a value).
+const startFlags = (a, tool) => (a.flags?.[tool] || []).map((f) => {
+  const g = { ...f };
+  if (g.choices && !g.choices.includes(g.value)) g.value = g.choices[0]; // what the select would show
+  g.on = !!g.default && usable(g);
+  return g;
+});
+const builtinArgs = (a, tool) => new Set((a.flags?.[tool] || []).filter((f) => !f.custom).flatMap((f) => f.args));
+// a custom flag the server hasn't allowed (agents too old to tell send null): shown unticked, never sent
+const refused = (a, tool, f) => !!f.custom && Array.isArray(a.allowed?.[tool])
+  && !a.allowed[tool].some((seq) => seq.join("\0") === f.args.join("\0"))
+  && !f.args.every((x) => builtinArgs(a, tool).has(x));
+// --continue only without --resume; --fork-session only with a picked session to resume
+const fits = (f, resume, picked) => (resume ? f.resume !== false : !f.resume_only) && !(f.resume_only && !picked);
+// a checkbox is drawn ticked exactly when its flag is sent
+const ticked = (a, tool, f, resume, picked) => !!f.on && usable(f) && fits(f, resume, picked) && !refused(a, tool, f);
+const sendArgs = (a, tool, flags, resume, picked) => flags.filter((f) => ticked(a, tool, f, resume, picked)).flatMap(flagArgs);
+// The command the agent runs for these arguments (shown at the bottom of the dialog): it adds Claude Code's --name for
+// a named new session, puts the session to resume where each tool expects it, and moves --remote-control last.
+const commandLine = (tool, args, { resume = false, sid = null, name = "" } = {}) => {
+  const named = !resume && tool === "claude" && name && !args.includes("--name") && !args.includes("-n");
+  const parts = resume && tool === "codex" ? [BIN.codex, "resume", ...args, sid || "<session>"]
+    : [BIN[tool], ...args, ...(named ? ["--name", name] : []), ...(resume ? ["--resume", sid || "<session>"] : [])];
+  const rc = parts.indexOf("--remote-control"); // its optional value can't take the next word
+  if (rc > 0) parts.push(...parts.splice(rc, 1));
+  return parts;
+};
+const shellWords = (parts) => parts.map((x) => (/[\s'"]/.test(x) || x === "" ? `'${x.replace(/'/g, "'\\''")}'` : x)).join(" ");
 const label = (f) => (f.fmt ? f.args.join(" ") + (f.fmt === "{}" ? "" : " " + f.fmt.replace("={}", "")) : f.args.join(" "));
 const COLORS = { working: "#f59e0b", idle: "#22c55e", starting: "#9ca3af" };
 const store = (v) => { try { return v === undefined ? localStorage.getItem(SAVED) : localStorage.setItem(SAVED, v); } catch { return null; } };
@@ -221,9 +252,8 @@ class AgentSessionsCard extends HTMLElement {
     else if (act === "stop" && a.confirm_stop) { this._confirm = id; this._render(); }
     else if (act === "stop" || act === "stop-yes") { this._confirm = null; this._call("stop_session", { session: id }, id); }
     else if (act === "resume") {
-      const tool = el.dataset.tool;
-      const args = (a.flags[tool] || []).filter((f) => f.default && f.resume && usable(f)).flatMap(flagArgs);
-      this._call("resume_session", { tool, session_id: id, args }, id);
+      const tool = el.dataset.tool; // the dialog's starting checklist for resuming this session, nothing else
+      this._call("resume_session", { tool, session_id: id, args: sendArgs(a, tool, startFlags(a, tool), true, true) }, id);
     } else if (act === "new") openDialog(this, a);
     else if (act === "all") openDialog(this, a, { resume: true });
   }
@@ -317,24 +347,17 @@ function openDialog(card, a, opts = {}) {
     folder: a.folders[0], name: "" };
   const close = () => { host.remove(); document.removeEventListener("keydown", onKey); };
   const flagsOf = (t) => {
-    if (!state.flags[t]) state.flags[t] = (a.flags[t] || []).map((f) => ({ ...f, on: f.default && usable(f) }));
+    if (!state.flags[t]) state.flags[t] = startFlags(a, t);
     return state.flags[t];
   };
   const here = () => state.pick && state.pick.config_entry_id === a.config_entry_id;
-  // Custom flags the server hasn't allowed would only fail on Start; say so up front (agents too old to tell: null).
-  const builtin = (t) => new Set((a.flags[t] || []).filter((f) => !f.custom).flatMap((f) => f.args));
-  const refused = (f) => f.custom && Array.isArray(a.allowed?.[state.tool])
-    && !a.allowed[state.tool].some((seq) => seq.join("\0") === f.args.join("\0"))
-    && !f.args.every((x) => builtin(state.tool).has(x));
-  const fits = (f) => (state.resume ? f.resume !== false : !f.resume_only) && !(f.resume_only && !state.pick);
-  const args = () => flagsOf(state.tool).filter((f) => f.on && usable(f) && fits(f) && !refused(f)).flatMap(flagArgs);
+  const fit = (f) => fits(f, state.resume, !!state.pick);
+  const no = (f) => refused(a, state.tool, f);
+  const args = () => sendArgs(a, state.tool, flagsOf(state.tool), state.resume, !!state.pick);
   const command = () => {
-    const sid = state.pick?.session_id;
-    const parts = state.resume && state.tool === "codex" ? [BIN.codex, "resume", ...args(), sid || "<session>"]
-      : [BIN[state.tool], ...args(), ...(state.resume ? ["--resume", sid || "<session>"] : [])];
-    const rc = parts.indexOf("--remote-control"); // the agent runs it last (its optional value can't take a word)
-    if (rc > 0) parts.push(...parts.splice(rc, 1));
-    return parts.map((x) => (/\s/.test(x) ? `'${x}'` : x)).join(" ");
+    const n = root.querySelector("#name");
+    const name = (n ? n.value : state.name).trim();
+    return shellWords(commandLine(state.tool, args(), { resume: state.resume, sid: state.pick?.session_id, name }));
   };
   const ready = () => !state.resume || !!state.pick;
   const keep = () => {
@@ -365,12 +388,12 @@ function openDialog(card, a, opts = {}) {
         ${local ? "" : `<div class="move">The conversation is copied from ${esc(p.server)} to ${esc(a.server)}. It stays on ${esc(p.server)} too.</div>`}` : ""}
       ${flagsOf(state.tool).map((f, i) => {
         if (state.resume && f.resume === false) return "";
-        const off = !fits(f), no = refused(f);
-        return `<label class="chk${off || no ? " dim" : ""}"><input type="checkbox" data-i="${i}" ${f.on && !off && !no && usable(f) ? "checked" : ""}
-          ${off || no || !usable(f) ? "disabled" : ""}><span>${esc(label(f))}</span>
+        const off = !fit(f), nope = no(f);
+        return `<label class="chk${off || nope ? " dim" : ""}"><input type="checkbox" data-i="${i}" ${ticked(a, state.tool, f, state.resume, !!state.pick) ? "checked" : ""}
+          ${off || nope || !usable(f) ? "disabled" : ""}><span>${esc(label(f))}</span>
         ${f.choices ? `<select class="v" data-v="${i}">${f.choices.map((c) => `<option ${c === f.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
           : f.fmt ? `<input type="text" class="v" data-v="${i}" value="${esc(f.value)}" placeholder="value">`
-          : no ? `<span class="c no">not allowed on server</span>`
+          : nope ? `<span class="c no">not allowed on server</span>`
           : f.resume_only ? `<span class="c">with ${resumeLabel}</span>`
           : f.custom ? `<span class="c">custom</span>` : ""}</label>`;
       }).join("")}
@@ -421,10 +444,11 @@ function openDialog(card, a, opts = {}) {
   });
   scrim.addEventListener("input", (e) => {
     const i = e.target.dataset.v;
+    if (e.target.id === "name") root.querySelector(".prev").textContent = command(); // Claude Code: --name <name>
     if (i === undefined) return;
     const f = flagsOf(state.tool)[+i], box = root.querySelector(`input[data-i="${i}"]`);
     f.value = e.target.value;
-    if (box && !fits(f)) return;
+    if (box && !fit(f)) return;
     if (box) {
       // picking a value (e.g. effort "high") means "use it": tick the flag, or the value is shown but never sent
       box.disabled = !usable(f);
